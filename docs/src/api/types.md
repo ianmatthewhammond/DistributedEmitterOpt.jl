@@ -6,14 +6,8 @@ Core data structures for problem definition and state management.
 
 ```@docs
 FieldConfig
-cache_key
-MaterialSpec
 Environment
-resolve_index
 MaxwellProblem
-effective_outputs
-all_configs
-is_elastic
 ```
 
 ## ObjectiveFunction Interface

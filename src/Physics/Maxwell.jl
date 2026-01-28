@@ -22,18 +22,18 @@ Background permittivity: ns² in substrate (z < des_low), nf² in fluid (z > des
 """
 function ε_background(x, phys)
     if x[3] < phys.des_low
-        return phys.ns^2 * (1 - im * phys.α)
+        return phys.ns^2 * (1 + im * phys.α)
     else
-        return phys.nf^2 * (1 - im * phys.α)
+        return phys.nf^2 * (1 + im * phys.α)
     end
 end
 
 """Background for WF (wave-function) formulation."""
 function ε_background_wf(x, phys)
     if x[3] < phys.des_low
-        return phys.ns^2 * (1 - im * phys.α)
+        return phys.ns^2 * (1 + im * phys.α)
     end
-    return phys.nf^2 * (1 - im * phys.α)
+    return phys.nf^2 * (1 + im * phys.α)
 end
 
 """
@@ -44,7 +44,7 @@ This gives ε = ε_base when p=0 and ε = εm when p=1.
 """
 function ε_design_wf(p, phys)
     neff = phys.nf + (phys.nm - phys.nf) * p
-    (neff^2 - phys.nf^2) * (1 - im * phys.α)
+    (neff^2 - phys.nf^2) * (1 + im * phys.α)
 end
 
 """
@@ -57,7 +57,7 @@ Note: The absorption factor (1 - iα) must be included to match the
 permittivity function ε_design_wf.
 """
 function ∂ε_∂p(p, phys)
-    2 * (phys.nm - phys.nf) * (1 - im * phys.α) * (phys.nf + (phys.nm - phys.nf) * p)
+    2 * (phys.nm - phys.nf) * (1 + im * phys.α) * (phys.nf + (phys.nm - phys.nf) * p)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -121,8 +121,8 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
             # Design region permittivity
             (k^2) * ∫(v ⋅ (εₘ * u))sim.dΩ_design +
             # Sommerfeld ABC (top and bottom)
-            im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_top +
-            im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
+            -im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_top +
+            -im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
         )
     end
 
@@ -164,7 +164,7 @@ function assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys::PhysicalPara
     ∇pf = ∇(pf)
 
     ∂g_∂pf = assemble_vector(space) do v
-        -(k^2) * ∫(
+        (k^2) * ∫(
             real(
                 (((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)) *
                 (∂εε ∘ pt) *

@@ -29,6 +29,8 @@ Dispatches based on foundry_mode.
 """
 function objective_and_gradient!(∇g::Vector{Float64}, p::Vector{Float64},
     prob::OptimizationProblem)
+    # TODO: upgrade to design-aware cache invalidation (hash/version) instead of always clearing.
+    clear_maxwell_factors!(prob.pool)
     if prob.foundry_mode
         return compute_gradient_2d_opt!(∇g, p, prob)
     else
@@ -64,10 +66,10 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     fields = solve_forward!(pde, pt, sim, pool)
 
     # ═══ Step 5: Compute objective ═══
-    g = compute_objective(objective, fields, pt, sim)
+    g = compute_objective(objective, pde, fields, pt, sim)
 
     # ═══ Step 6: Compute adjoint sources ═══
-    sources = compute_adjoint_sources(objective, fields, pt, sim)
+    sources = compute_adjoint_sources(objective, pde, fields, pt, sim)
 
     # ═══ Step 7: Solve adjoint Maxwell ═══
     adjoints = solve_adjoint!(pde, sources, sim, pool)
@@ -76,7 +78,7 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     ∂g_∂pf_pde = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim.P)
 
     # ═══ Step 9: Explicit sensitivity (∂g/∂pf direct) ═══
-    ∂g_∂pf_explicit = explicit_sensitivity(objective, fields, pf, pt, sim, control)
+    ∂g_∂pf_explicit = explicit_sensitivity(objective, pde, fields, pf, pt, sim, control)
 
     # ═══ Step 10: Total sensitivity ═══
     ∂g_∂pf_vec = ∂g_∂pf_pde .+ ∂g_∂pf_explicit
@@ -125,10 +127,10 @@ function compute_gradient_3d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     fields = solve_forward!(pde, pt, sim, pool)
 
     # ═══ Step 4: Compute objective ═══
-    g = compute_objective(objective, fields, pt, sim)
+    g = compute_objective(objective, pde, fields, pt, sim)
 
     # ═══ Step 5: Compute adjoint sources ═══
-    sources = compute_adjoint_sources(objective, fields, pt, sim)
+    sources = compute_adjoint_sources(objective, pde, fields, pt, sim)
 
     # ═══ Step 6: Solve adjoint Maxwell ═══
     adjoints = solve_adjoint!(pde, sources, sim, pool)
@@ -137,7 +139,7 @@ function compute_gradient_3d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     ∂g_∂pf = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim.Pf)
 
     # ═══ Step 8: Explicit sensitivity ═══
-    ∂g_∂pf .+= explicit_sensitivity(objective, fields, pf, pt, sim, control)
+    ∂g_∂pf .+= explicit_sensitivity(objective, pde, fields, pf, pt, sim, control)
 
     # ═══ Step 9: Chain through filter ═══
     ∂g_∂p = filter_helmholtz_adjoint!(∂g_∂pf, pool.filter_cache, sim, control)

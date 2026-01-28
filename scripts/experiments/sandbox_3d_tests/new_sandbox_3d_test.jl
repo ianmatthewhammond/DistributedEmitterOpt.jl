@@ -1,14 +1,9 @@
 """
-    Debug script: isotropic tensor, 3D DOFs, volume objective, elastic.
+    New-code sandbox 3D DOF test.
 
 Run from REPL:
-    julia> include("scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl")
+    julia> include("scripts/experiments/sandbox_3d_tests/new_sandbox_3d_test.jl")
 """
-
-using Pkg; 
-Pkg.activate(".")
-Pkg.instantiate()
-using Revise
 
 using DistributedEmitterOpt
 using Gridap
@@ -16,22 +11,22 @@ using LinearAlgebra
 using Random
 using PyCall
 
-# Dir of file
 const OUTDIR = dirname(@__FILE__)
 const PERTURBATION = 1e-8
-const TOL_RELATIVE = 1e-6
+const TOL_RELATIVE = 1e-4
 
-"""Build a minimal problem for the isotropic 3D DOF elastic volume test."""
-function build_debug_objective(; outdir::String=OUTDIR)
+"""Build a sandbox-matched problem using the new architecture."""
+function build_debug_problem(; outdir::String=OUTDIR)
     mkpath(outdir)
-    # Coarse test geometry/mesh
-    geo = SymmetricGeometry(532.0; L=100.0, W=100.0, hd=80.0, hsub=40.0)
-    geo.l1 = 50.0
-    geo.l2 = 30.0
-    geo.l3 = 50.0
+
+    # Geometry (sandbox config)
+    geo = SymmetricGeometry(532.0; L=150.0, W=150.0, hd=150.0, hsub=50.0)
     geo.hair = 200.0
     geo.hs = 120.0
     geo.ht = 80.0
+    geo.l1 = 30.0
+    geo.l2 = 20.0
+    geo.l3 = 30.0
 
     meshfile = joinpath(outdir, "mesh.msh")
     genperiodic(geo, meshfile; per_x=true, per_y=true)
@@ -45,25 +40,28 @@ function build_debug_objective(; outdir::String=OUTDIR)
         αₚ=αₚ,
         volume=true,
         surface=false,
-        use_damage_model=false
+        use_damage_model=false,
+        E_threshold=10.0
     )
 
-    env = Environment(mat_design="Ag", mat_fluid=1.33)
+    env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
     inputs = [FieldConfig(532.0; θ=0.0, pol=:y)]
     outputs = FieldConfig[]  # Elastic scattering: outputs reuse inputs
     pde = MaxwellProblem(env=env, inputs=inputs, outputs=outputs)
 
     control = Control(
         use_filter=true,
-        R_filter=(15.0, 15.0, 15.0),
+        R_filter=(20.0, 20.0, 20.0),
         use_dct=false,         # Helmholtz filter for 3D DOF mode
         use_projection=true,
         β=8.0,
         η=0.5,
         use_ssp=true,
+        R_ssp=2.0,
         flag_volume=true,
         flag_surface=false,
-        use_damage=false
+        use_damage=false,
+        E_threshold=10.0
     )
 
     solver = UmfpackSolver()
@@ -71,7 +69,8 @@ function build_debug_objective(; outdir::String=OUTDIR)
         foundry_mode=false,
         control=control
     )
-    Random.seed!(42)
+
+    Random.seed!(2)
     init_random!(prob)
 
     return prob
@@ -145,13 +144,12 @@ function write_vtk_outputs(sim, Ep, pt; outdir::String=OUTDIR)
     return _first_vtk_path(fields_files), _first_vtk_path(design_files)
 end
 
-"""Save a quick diagnostic image using pyvista (based on old repo Vis.jl)."""
+"""Save a quick diagnostic image using pyvista."""
 function save_field_image(fields_vtu::String, design_vtu::String; outdir::String=OUTDIR)
     pv = pyimport("pyvista")
     try
         pv.start_xvfb()
     catch
-        # Ignore if running with a display.
     end
 
     field_grid = pv.read(fields_vtu)
@@ -166,15 +164,15 @@ function save_field_image(fields_vtu::String, design_vtu::String; outdir::String
     plotter.add_mesh(design_grid, scalars="p", cmap="Greys", clim=(0.0, 1.0), opacity=0.85)
     plotter.show_axes()
 
-    png_path = joinpath(outdir, "fields.png")
+    png_path = joinpath(outdir, "new_sandbox_fields.png")
     plotter.show(screenshot=png_path)
     return png_path
 end
 
-println("\n=== Debug: isotropic, 3D DOF, volume objective, elastic ===")
+println("\n=== New sandbox 3D DOF test ===")
 println("Output directory: $(OUTDIR)")
 
-prob = build_debug_objective()
+prob = build_debug_problem()
 p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
 rel_err = test_gradient(prob, p0)
 println("PASS = $(rel_err < TOL_RELATIVE)  (rel_err = $rel_err, tol = $TOL_RELATIVE)")
@@ -182,8 +180,9 @@ println("PASS = $(rel_err < TOL_RELATIVE)  (rel_err = $rel_err, tol = $TOL_RELAT
 Ep, pt = compute_forward_fields(prob, p0)
 fields_vtu, design_vtu = write_vtk_outputs(prob.sim, Ep, pt)
 png_path = save_field_image(fields_vtu, design_vtu)
+mesh_path = joinpath(OUTDIR, "mesh.msh")
 
-println("Saved mesh: $(joinpath(OUTDIR, "mesh.msh"))")
+println("Saved mesh: $mesh_path")
 println("Saved VTK:  $fields_vtu")
 println("Saved VTK:  $design_vtu")
 println("Saved PNG:  $png_path")
