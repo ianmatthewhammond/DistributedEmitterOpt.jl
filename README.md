@@ -1,6 +1,6 @@
 # DistributedEmitterOpt.jl
 
-[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://hammy4815.github.io/DistributedEmitterOpt.jl/dev/)
+[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://ianmatthewhammond.github.io/DistributedEmitterOpt.jl/dev/)
 
 A Julia framework for topology optimization of nanophotonic structures using adjoint sensitivity analysis.
 
@@ -20,7 +20,7 @@ This package provides a modular architecture for optimizing electromagnetic stru
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/hammy4815/DistributedEmitterOpt.jl")
+Pkg.add(url="https://github.com/ianmatthewhammond/DistributedEmitterOpt.jl")
 ```
 
 ## Quick Start

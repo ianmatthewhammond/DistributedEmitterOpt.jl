@@ -123,39 +123,18 @@ function pde_sensitivity(pde::MaxwellProblem,
 
     ∂g_∂pf = zeros(Float64, num_free_dofs(space))
 
-    # Get all input configs
-    for fc_in in pde.inputs
-        key_in = cache_key(fc_in)
-        if !haskey(fields, key_in) || !haskey(adjoints, key_in)
+    # Sum over all unique field configs; adjoint sources already include weights.
+    for fc in all_configs(pde)
+        key = cache_key(fc)
+        if !haskey(fields, key) || !haskey(adjoints, key)
             continue
         end
 
-        E = fields[key_in]
-        λ = adjoints[key_in]
-        phys = build_phys_params(fc_in, pde.env, sim; α=pde.α_loss)
+        E = fields[key]
+        λ = adjoints[key]
+        phys = build_phys_params(fc, pde.env, sim; α=pde.α_loss)
 
-        # Material sensitivity for this input
-        ∂g_∂pf .+= fc_in.weight * assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys, control; space)
-    end
-
-    # Get output configs (if different from inputs)
-    for fc_out in effective_outputs(pde)
-        key_out = cache_key(fc_out)
-        key_in_match = any(cache_key(fc) == key_out for fc in pde.inputs)
-
-        if key_in_match
-            continue  # Already handled above
-        end
-
-        if !haskey(fields, key_out) || !haskey(adjoints, key_out)
-            continue
-        end
-
-        E = fields[key_out]
-        λ = adjoints[key_out]
-        phys = build_phys_params(fc_out, pde.env, sim; α=pde.α_loss)
-
-        ∂g_∂pf .+= fc_out.weight * assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys, control; space)
+        ∂g_∂pf .+= assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys, control; space)
     end
 
     return ∂g_∂pf

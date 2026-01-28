@@ -1,3 +1,5 @@
+import GridapGmsh
+
 """
     Simulation
 
@@ -88,6 +90,7 @@ function build_simulation(meshfile::String;
 
     # Load mesh
     sim.model = GmshDiscreteModel(meshfile)
+    sim.model = repair_gmsh_model(meshfile, sim.model)
 
     # Dirichlet tags
     dirichlet_tags = String[]
@@ -155,6 +158,157 @@ function build_simulation(meshfile::String;
     sim.source_y = source_y
 
     return sim
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Mesh repair (ported from old repo)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""Repair a Gmsh model if it contains bad vertices."""
+function repair_gmsh_model(meshfile::String, model)
+    grid_topology = Gridap.Geometry.get_grid_topology(model)
+    vertex_to_cells = Gridap.Geometry.get_faces(grid_topology, 0, num_cell_dims(grid_topology))
+    bad_vertices = findall(i -> i == 0, map(length, vertex_to_cells))
+    @show bad_vertices
+
+    if !isempty(bad_vertices)
+        model = fix_gmsh_model(meshfile, bad_vertices)
+        grid_topology = Gridap.Geometry.get_grid_topology(model)
+        vertex_to_cells = Gridap.Geometry.get_faces(grid_topology, 0, num_cell_dims(grid_topology))
+        bad_vertices = findall(i -> i == 0, map(length, vertex_to_cells))
+        @show bad_vertices
+    elseif needs_renumber(model)
+        # Some meshes pass the bad-vertex check but still have invalid node ids.
+        model = fix_gmsh_model(meshfile, Int[]; renumber=true)
+    end
+
+    return model
+end
+
+"""Detect if node ids are out of bounds (renumber needed)."""
+function needs_renumber(model)::Bool
+    try
+        grid = if hasproperty(model, :grid)
+            getproperty(model, :grid)
+        else
+            Gridap.Geometry.get_grid(model)
+        end
+        node_coords = getproperty(grid, :node_coordinates)
+        cell_node_ids = getproperty(grid, :cell_node_ids)
+        node_ids = Gridap.Geometry.to_dict(cell_node_ids)[:data]
+        if isempty(node_ids)
+            return false
+        end
+        max_id = maximum(node_ids)
+        min_id = minimum(node_ids)
+        return max_id > length(node_coords) || min_id < 1
+    catch
+        return false
+    end
+end
+
+"""Fix Gmsh model by removing bad vertices and rebuilding topology."""
+function fix_gmsh_model(mshfile::String, bad_vertices::AbstractArray; renumber::Bool=true)
+    GridapGmsh.@check_if_loaded
+    if !isfile(mshfile)
+        error("Msh file not found: $mshfile")
+    end
+
+    gmsh = GridapGmsh.gmsh
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 1)
+    gmsh.option.setNumber("Mesh.SaveAll", 1)
+    gmsh.option.setNumber("Mesh.MedImportGroupsOfNodes", 1)
+    gmsh.open(mshfile)
+    renumber && gmsh.model.mesh.renumberNodes()
+    renumber && gmsh.model.mesh.renumberElements()
+
+    Dc = GridapGmsh._setup_cell_dim(gmsh)
+    Dp = GridapGmsh._setup_point_dim(gmsh, Dc)
+    node_to_coords = GridapGmsh._setup_node_coords(gmsh, Dp)
+    vertex_to_node, node_to_vertex = GridapGmsh._setup_nodes_and_vertices(gmsh, node_to_coords)
+    vertex_to_node = Vector{Int64}(vertex_to_node)
+    node_to_vertex = Vector{Int64}(node_to_vertex)
+    grid, cell_to_entity = GridapGmsh._setup_grid(gmsh, Dc, Dp, node_to_coords, node_to_vertex)
+    cell_to_vertices, vertex_to_node, node_to_vertex =
+        GridapGmsh._setup_cell_to_vertices(grid, vertex_to_node, node_to_vertex)
+
+    grid_topology = GridapGmsh.UnstructuredGridTopology(grid, cell_to_vertices, vertex_to_node)
+    labeling = GridapGmsh._setup_labeling(gmsh, grid, grid_topology, cell_to_entity, vertex_to_node, node_to_vertex)
+
+    # Fix node coordinates
+    for vertex in sort(bad_vertices)
+        deleteat!(grid.node_coordinates, vertex)
+        deleteat!(vertex_to_node, vertex)
+        vertex_to_node[vertex:end] .-= 1
+        deleteat!(node_to_vertex, vertex)
+        node_to_vertex[vertex:end] .-= 1
+    end
+
+    # Fix grid topology
+    oldmat = grid_topology.n_m_to_nface_to_mfaces
+    for i in 1:4
+        if !isassigned(oldmat, i)
+            continue
+        end
+        dct = Gridap.Geometry.to_dict(oldmat[i, 1])
+        for vertex in bad_vertices
+            if i == 1
+                deleteat!(dct[:ptrs], length(dct[:ptrs]))
+                deleteat!(dct[:data], length(dct[:ptrs]))
+            else
+                for (k, d) in enumerate(dct[:data])
+                    if d > vertex
+                        dct[:data][k] -= 1
+                    end
+                end
+            end
+        end
+        grid_topology.n_m_to_nface_to_mfaces[i, 1] =
+            Gridap.Geometry.from_dict(Gridap.Arrays.Table{Int32,Vector{Int32},Vector{Int32}}, dct)
+    end
+    for j in 2:4
+        if !isassigned(oldmat, 4 * (j - 1) + 1)
+            continue
+        end
+        dct = Gridap.Geometry.to_dict(oldmat[1, j])
+        for vertex in bad_vertices
+            deleteat!(dct[:ptrs], vertex)
+            deleteat!(dct[:data], vertex)
+        end
+        grid_topology.n_m_to_nface_to_mfaces[1, j] =
+            Gridap.Geometry.from_dict(Gridap.Arrays.Table{Int32,Vector{Int32},Vector{Int32}}, dct)
+    end
+
+    # Fix cell node ids
+    old_table = Gridap.Geometry.to_dict(grid.cell_node_ids)
+    for vertex in bad_vertices
+        for (i, d) in enumerate(old_table[:data])
+            if d > vertex
+                old_table[:data][i] -= 1
+            end
+        end
+    end
+    new_table =
+        Gridap.Geometry.from_dict(Gridap.Arrays.Table{Int32,Vector{Int32},Vector{Int32}}, old_table)
+    grid = Gridap.Geometry.UnstructuredGrid(
+        grid.node_coordinates,
+        new_table,
+        grid.reffes,
+        grid.cell_types,
+        grid.orientation_style,
+        grid.facet_normal
+    )
+
+    # Fix labeling
+    for vertex in bad_vertices
+        deleteat!(labeling.d_to_dface_to_entity[1], vertex)
+    end
+
+    model = GridapGmsh.UnstructuredDiscreteModel(grid, grid_topology, labeling)
+
+    gmsh.finalize()
+    return model
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════

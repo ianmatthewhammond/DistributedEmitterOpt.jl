@@ -1,0 +1,58 @@
+# Debugging Plan: Gradient Discrepancy
+
+## 1. Problem Statement
+The new [DistributedEmitterOpt.jl](file:///Users/ianhammond/GitHub/DistributedEmitterOpt.jl/src/DistributedEmitterOpt.jl) codebase produces incorrect gradients (and likely objective values) compared to the legacy `Emitter3DTopOpt` code. The error manifests as a large relative discrepancy in finite difference checks.
+
+## 2. Root Cause Analysis: Sign Error
+A detailed trace of both codebases reveals a sign inversion in the material sensitivity assembly.
+
+### The Math (Consensus)
+*   **Forward Problem**: $A u = b$ where $A \approx \nabla \times \nabla \times - k^2 \epsilon(p)$.
+    *   $\frac{\partial A}{\partial p} = - k^2 \frac{\partial \epsilon}{\partial p}$.
+*   **Adjoint Source**: $S = \frac{\partial J}{\partial u}$. (Verified identical in both codes).
+*   **Adjoint Equation**: $A^H \lambda = S$. (Verified identical).
+    *   This yields $\lambda_{calc}$.
+    *   Standard optimization theory often defines the adjoint $\lambda_{opt}$ such that $A^H \lambda_{opt} = - \nabla_u J$.
+    *   Thus, $\lambda_{calc} = - \lambda_{opt}$.
+*   **Gradient Formula**: $\frac{\partial J}{\partial p} = 2 \text{Re}(\lambda_{opt}^H \frac{\partial A}{\partial p} u)$.
+    *   Substitute $\lambda_{opt} = - \lambda_{calc}$:
+    *   $\text{Grad} = 2 \text{Re}(- \lambda_{calc}^H (-k^2 \epsilon') u)$.
+    *   $\text{Grad} = + 2 k^2 \text{Re}(\lambda_{calc}^H \epsilon' u)$.
+
+### The Discrepancy
+*   **Legacy Code ([Gradients.jl](file:///Users/ianhammond/GitHub/Emitter3DTopOpt/src/Gradients.jl) & [Physics.jl](file:///Users/ianhammond/GitHub/Emitter3DTopOpt/src/Physics.jl))**:
+    *   Calculates `real( - ∂A/∂p(v=conj(λ)) )`.
+    *   Since `∂A/∂p` contains `-k^2`, effectively calculates `real( - (-k^2) ...)`.
+    *   **Result**: $+ k^2 \dots$ (Matches derivation).
+
+*   **New Code ([Maxwell.jl](file:///Users/ianhammond/GitHub/DistributedEmitterOpt.jl/src/Physics/Maxwell.jl))**:
+    *   Calculates `-(k^2) * real(...)`.
+    *   **Result**: $- k^2 \dots$ (Mismatch).
+
+## 3. Discarded Hypotheses
+*   **Conjugation Error**: Both codes effectively use `conj(λ)` in the integral (Legacy via `wconjh` construction, New via explicit `conj(λ)`). This is consistent.
+*   **Adjoint Source Definition**: Both compute $+\partial J/\partial E$.
+
+## 4. Proposed Experiment / Fix
+
+### Action
+Modify [DistributedEmitterOpt.jl/src/Physics/Maxwell.jl](file:///Users/ianhammond/GitHub/DistributedEmitterOpt.jl/src/Physics/Maxwell.jl) inside `assemble_material_sensitivity_pf`:
+
+```diff
+-    -(k^2) * ∫(
++    +(k^2) * ∫(
+             real(
+                 ...
+                 (conj(λ) ⋅ E)
+             )
+         )sim.dΩ_design
+```
+
+### Verification
+1.  Run [scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl](file:///Users/ianhammond/GitHub/DistributedEmitterOpt.jl/scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl).
+2.  Expect Relative Error to drop from ~100% (or high value) to < 1% (finite difference match).
+
+## 5. Next Steps
+*   Apply the fix.
+*   Run the debug script.
+*   If passed, verify `foundry_mode` (2D) logic as well, as it likely shares the same physics assembly.
