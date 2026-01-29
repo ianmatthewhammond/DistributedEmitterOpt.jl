@@ -22,6 +22,7 @@ using .Setup
 
 using DistributedEmitterOpt
 using Gridap
+import Gmsh: gmsh
 using LinearAlgebra
 using Random
 using SparseArrays
@@ -34,17 +35,80 @@ const NF_SANDBOX = sqrt(1.77)
 """Generate a mesh using the new-code geometry path."""
 function generate_new_mesh(; outdir::String=OUTDIR)
     hr = 532.0 / NF_SANDBOX / 2
-    geo = SymmetricGeometry(532.0; L=150.0, W=150.0, hd=150.0, hsub=50.0)
-    geo.ht = hr
-    geo.hs = hr + hr
-    geo.hair = hr + hr + hr
-    geo.l1 = 30.0
-    geo.l2 = 20.0
-    geo.l3 = 30.0
-
+    # Build geometry using the legacy struct layout, but call the copied generator in DistributedEmitterOpt.
+    geo = DistributedEmitterOpt.SymmetricGeometry(150.0, 150.0, hr + hr + hr, hr + hr, hr, 150.0, 50.0, 0.0, 30.0, 20.0, 30.0, 0)
     meshfile = joinpath(outdir, "new_mesh.msh")
-    genperiodic(geo, meshfile; per_x=false, per_y=false)
-    return meshfile
+    DistributedEmitterOpt.genperiodic(geo, meshfile; per_x=false, per_y=false)
+    return meshfile, geo, (false, false)
+end
+
+function describe_geometry(label, geo; per_x::Bool, per_y::Bool)
+    z0 = -(geo.hair + geo.hd + geo.hsub) / 2
+    println("== $label geometry ==")
+    println("  L=$(geo.L) W=$(geo.W)")
+    println("  hd=$(geo.hd) hsub=$(geo.hsub)")
+    println("  ht=$(geo.ht) hs=$(geo.hs) hair=$(geo.hair)")
+    println("  l1=$(geo.l1) l2=$(geo.l2) l3=$(geo.l3)")
+    println("  per_x=$per_x per_y=$per_y z0=$z0")
+end
+
+function describe_physics(label, phys)
+    if isnothing(phys)
+        println("== $label physics ==\n  missing")
+        return
+    end
+    println("== $label physics ==")
+    println("  nf=$(phys.nf) θ=$(phys.θ) ω=$(phys.ω)")
+end
+
+function summarize_mesh(meshfile::String)
+    if !isfile(meshfile)
+        println("== mesh summary ($meshfile) ==\n  missing file")
+        return
+    end
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 1)
+    gmsh.open(meshfile)
+
+    entities = gmsh.model.getEntities()
+    counts = Dict(0 => 0, 1 => 0, 2 => 0, 3 => 0)
+    for (dim, _) in entities
+        counts[dim] = get(counts, dim, 0) + 1
+    end
+
+    nodeTags, coords, _ = gmsh.model.mesh.getNodes()
+    types, elemTags, elemNodeTags = gmsh.model.mesh.getElements()
+    total_elems = sum(length.(elemTags))
+
+    xmin = Inf
+    ymin = Inf
+    zmin = Inf
+    xmax = -Inf
+    ymax = -Inf
+    zmax = -Inf
+    coord_sum = 0.0
+    for i in 1:3:length(coords)
+        x = coords[i]
+        y = coords[i + 1]
+        z = coords[i + 2]
+        xmin = min(xmin, x)
+        ymin = min(ymin, y)
+        zmin = min(zmin, z)
+        xmax = max(xmax, x)
+        ymax = max(ymax, y)
+        zmax = max(zmax, z)
+        coord_sum += x + y + z
+    end
+
+    println("== mesh summary ($meshfile) ==")
+    println("  entities: 0D=$(counts[0]) 1D=$(counts[1]) 2D=$(counts[2]) 3D=$(counts[3])")
+    println("  nodes=$(length(nodeTags)) elements=$(total_elems)")
+    println("  bbox=([$xmin,$xmax], [$ymin,$ymax], [$zmin,$zmax])")
+    println("  coord_sum=$(coord_sum)")
+    println("  elem_types=$(types)")
+    println("  elem_counts=$(length.(elemTags))")
+
+    gmsh.finalize()
 end
 
 function build_old_objective(; outdir::String=OUTDIR)
@@ -203,11 +267,14 @@ end
 println("\n=== Cache/LU comparison (sandbox 3D) ===")
 println("Output directory: $(OUTDIR)")
 
-new_meshfile = generate_new_mesh()
+new_meshfile, new_geo, (new_per_x, new_per_y) = generate_new_mesh()
 println("New mesh: $new_meshfile")
 
 # Old
 old_obj = build_old_objective()
+summarize_mesh(joinpath(OUTDIR, "old_mesh.msh"))
+describe_geometry("old", old_obj.geometry; per_x=false, per_y=false)
+describe_physics("old", old_obj.phys_1)
 Random.seed!(2)
 p0_old = 0.4 .+ 0.2 .* rand(Float64, old_obj.sim_y.np)
 grad_old = zeros(old_obj.sim_y.np)
@@ -215,7 +282,9 @@ g_old = e3.stepobjective(p0_old, grad_old; obj=old_obj)
 _ = e3.filter!(p0_old, old_obj)  # populate filter LU
 
 # New
+summarize_mesh(new_meshfile)
 new_prob = build_new_problem(new_meshfile)
+describe_geometry("new", new_geo; per_x=new_per_x, per_y=new_per_y)
 Random.seed!(2)
 p0_new = 0.4 .+ 0.2 .* rand(Float64, new_prob.sim.np)
 grad_new = zeros(new_prob.sim.np)

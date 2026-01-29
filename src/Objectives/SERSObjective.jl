@@ -188,14 +188,14 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
 end
 
 """
-    explicit_sensitivity(obj::SERSObjective, pde, fields, pf, pt, sim, control) → Vector
+    explicit_sensitivity(obj::SERSObjective, pde, fields, pf, pt, sim, control; space=sim.Pf) → Vector
 
 Explicit ∂g/∂pf term from objective's direct dependence on pt.
 Sums contributions over all input/output combinations with weights.
 """
-function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::Dict, pf, pt, sim, control)
+function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::Dict, pf, pt, sim, control; space=sim.Pf)
     if !obj.volume && !obj.surface
-        return zeros(Float64, num_free_dofs(sim.Pf))
+        return zeros(Float64, num_free_dofs(space))
     end
 
     inputs = pde.inputs
@@ -204,7 +204,7 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
     αc1, αc2 = α_cellfields(obj.αₚ, sim.Ω)
     ∇pf = ∇(pf)
 
-    ∂g_∂pf = zeros(Float64, num_free_dofs(sim.Pf))
+    ∂g_∂pf = zeros(Float64, num_free_dofs(space))
 
     for fc_in in inputs
         key_in = cache_key(fc_in)
@@ -226,7 +226,7 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
             Ee_conj = Ee'
             integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)
 
-            contrib = assemble_vector(sim.Pf) do v
+            contrib = assemble_vector(space) do v
                 term = 0.0
                 if obj.volume
                     term += dmg * (-real(integrand))

@@ -141,8 +141,22 @@ function build_simulation(meshfile::String;
     S_target = BoundaryTriangulation(sim.model, tags=["Target"])
     sim.dS_target = Measure(S_target, degree)
 
-    # Grid for 2D DOF mode
-    nodes = collect(Gridap.Geometry.get_cell_coordinates(sim.Ω))
+    # Grid for 2D DOF mode (use Pf DOF-ordered vertex coordinates)
+    topo = Gridap.Geometry.get_grid_topology(sim.model)
+    vertex_coords = collect(Gridap.Geometry.get_vertex_coordinates(topo))
+    nodes = vertex_coords
+    begin
+        space = sim.Pf
+        if hasproperty(space, :space)
+            space = getproperty(space, :space)
+        end
+        if hasproperty(space, :glue)
+            glue = getproperty(space, :glue)
+            if hasproperty(glue, :free_dof_to_node)
+                nodes = vertex_coords[glue.free_dof_to_node]
+            end
+        end
+    end
     np_mesh = num_free_dofs(sim.P)
     sim.grid = getgrid(sim.labels, sim.Ω, np_mesh, nodes; sizes)
 
@@ -337,4 +351,3 @@ function getdesignz(labels, Ω)
 
     return minimum(all_z), maximum(all_z)
 end
-

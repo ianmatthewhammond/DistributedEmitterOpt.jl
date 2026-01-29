@@ -109,6 +109,9 @@ function DSP_d∇pf(∇p, ρ̃::Real, ∇ρ̃; R::Float64, β::Float64, η::Floa
     end
 
     norm∇ρ̃ = sqrt(∇ρ̃ ⋅ ∇ρ̃)
+    if norm∇ρ̃ < 1e-8
+        return 0.0
+    end
     d = ((η - ρ̃) / norm∇ρ̃) / R
 
     fill_factor, dfill_factor_dd = if d < -1

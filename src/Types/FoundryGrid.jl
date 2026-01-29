@@ -9,8 +9,11 @@ to the 3D FEM mesh via bilinear interpolation.
 - `x` — Grid x-coordinates (monotonic)
 - `y` — Grid y-coordinates (monotonic)
 - `params` — Design parameter matrix (nx × ny)
-- `nodes` — Cell vertex coordinates for Jacobian computation
-- `jacobian` — Cached ∂(mesh quadrature)/∂(grid param) mapping
+- `nodes` — Mesh node coordinates for Jacobian computation
+- `jacobian` — Cached ∂(mesh node values)/∂(grid param) mapping
+- `adj_idx` — Cached grid indices for adjoint scatter (4 × nnodes)
+- `adj_w` — Cached weights for adjoint scatter (4 × nnodes)
+- `adj_ready` — Whether adjoint cache is initialized
 """
 mutable struct FoundryGrid
     x::Vector{Float64}
@@ -18,12 +21,17 @@ mutable struct FoundryGrid
     params::Matrix{Float64}
     nodes::Vector
     jacobian::Matrix{Float64}
+    adj_idx::Matrix{Int}
+    adj_w::Matrix{Float64}
+    adj_ready::Bool
 
     function FoundryGrid(x, y, params, nodes)
         nx, ny = length(x), length(y)
         nnodes = length(nodes)
         jacobian = zeros(Float64, nx * ny, nnodes)
-        new(x, y, params, nodes, jacobian)
+        adj_idx = zeros(Int, 4, nnodes)
+        adj_w = zeros(Float64, 4, nnodes)
+        new(x, y, params, nodes, jacobian, adj_idx, adj_w, false)
     end
 end
 
@@ -140,27 +148,93 @@ pf_grid(r, grid::FoundryGrid) = pf_grid(r, grid.params, grid.x, grid.y)
 """
     getjacobian!(grid::FoundryGrid) -> Matrix
 
-Compute and cache the Jacobian mapping from grid parameters to mesh cell centers.
-Used for backpropagating gradients from mesh to grid.
+Compute and cache the Jacobian mapping from grid parameters to mesh node values
+(Pf DOFs). Used for backpropagating gradients from mesh to grid.
 """
 function getjacobian!(grid::FoundryGrid)
     fill!(grid.jacobian, 0.0)
     nx, ny = length(grid.x), length(grid.y)
     tempjacobian = reshape(grid.jacobian, (nx, ny, size(grid.jacobian, 2)))
 
-    for (i, element) in enumerate(grid.nodes)
-        _update_jacobian!(i, element, tempjacobian, grid.x, grid.y)
+    for (i, node) in enumerate(grid.nodes)
+        _update_jacobian_vertex!(i, node, 1.0, tempjacobian, grid.x, grid.y)
     end
 
     grid.jacobian[:, :] = reshape(tempjacobian, (nx * ny, size(grid.jacobian, 2)))[:, :]
     return grid.jacobian
 end
 
-"""Update jacobian for a single mesh element (assumes 4 vertices per face)."""
-function _update_jacobian!(i, element, tempjacobian, gridx, gridy)
-    for vertex in element
-        _update_jacobian_vertex!(i, vertex, 0.25, tempjacobian, gridx, gridy)
+"""
+    prepare_grid_adjoint!(grid::FoundryGrid)
+
+Precompute the 4-point bilinear weights and grid indices for each mesh node.
+This lets us apply the adjoint mapping without forming a dense Jacobian.
+"""
+function prepare_grid_adjoint!(grid::FoundryGrid)
+    nx, ny = length(grid.x), length(grid.y)
+    lin = LinearIndices((nx, ny))
+
+    @inbounds for (i, node) in enumerate(grid.nodes)
+        x, y = node[1], node[2]
+
+        rx = searchsortedfirst(grid.x, x)
+        ry = searchsortedfirst(grid.y, y)
+        rx = clamp(rx, 2, nx)
+        ry = clamp(ry, 2, ny)
+        lx, ly = rx - 1, ry - 1
+
+        Δx_r = grid.x[rx] - x
+        Δx_l = x - grid.x[lx]
+        Δy_r = grid.y[ry] - y
+        Δy_l = y - grid.y[ly]
+
+        denom = (Δy_r + Δy_l) * (Δx_r + Δx_l)
+        if denom < 1e-12
+            idx = lin[rx, ry]
+            grid.adj_idx[:, i] .= idx
+            grid.adj_w[1, i] = 1.0
+            grid.adj_w[2, i] = 0.0
+            grid.adj_w[3, i] = 0.0
+            grid.adj_w[4, i] = 0.0
+            continue
+        end
+
+        grid.adj_idx[1, i] = lin[lx, ly]
+        grid.adj_idx[2, i] = lin[rx, ly]
+        grid.adj_idx[3, i] = lin[lx, ry]
+        grid.adj_idx[4, i] = lin[rx, ry]
+
+        grid.adj_w[1, i] = Δx_r * Δy_r / denom
+        grid.adj_w[2, i] = Δx_l * Δy_r / denom
+        grid.adj_w[3, i] = Δx_r * Δy_l / denom
+        grid.adj_w[4, i] = Δx_l * Δy_l / denom
     end
+
+    grid.adj_ready = true
+    return grid
+end
+
+"""
+    apply_grid_adjoint!(out, grid, node_grad) -> out
+
+Apply the adjoint of the grid→mesh interpolation without forming a dense matrix.
+`node_grad` is ∂g/∂pf at mesh nodes (Pf DOFs). `out` is ∂g/∂p on the 2D grid.
+"""
+function apply_grid_adjoint!(out::Vector{Float64}, grid::FoundryGrid, node_grad::Vector{Float64})
+    if !grid.adj_ready
+        prepare_grid_adjoint!(grid)
+    end
+    fill!(out, 0.0)
+
+    @inbounds for i in eachindex(node_grad)
+        gi = node_grad[i]
+        out[grid.adj_idx[1, i]] += grid.adj_w[1, i] * gi
+        out[grid.adj_idx[2, i]] += grid.adj_w[2, i] * gi
+        out[grid.adj_idx[3, i]] += grid.adj_w[3, i] * gi
+        out[grid.adj_idx[4, i]] += grid.adj_w[4, i] * gi
+    end
+
+    return out
 end
 
 function _update_jacobian_vertex!(i, vertex, weight, tempjacobian, gridx, gridy)
