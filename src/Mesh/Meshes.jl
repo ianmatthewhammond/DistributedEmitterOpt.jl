@@ -2,7 +2,7 @@
     Meshes
 
 Gmsh-based mesh generation for periodic unit cells.
-Port of genperiodic from Emitter3DTopOpt.
+Port of genmesh from Emitter3DTopOpt.
 """
 
 import Gmsh: gmsh
@@ -265,136 +265,11 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    genperiodic_modern(geo, meshfile; per_x=true, per_y=true) -> (des_low, des_high)
+    genmesh(geo, meshfile; per_x=true, per_y=true) -> (des_low, des_high)
 
-Generate periodic mesh for symmetric geometry.
-This is the modern implementation (kept for reference).
+Generate periodic mesh using the legacy box point order (Emitter3DTopOpt).
 """
-function genperiodic_modern(geo::SymmetricGeometry, meshfile::String; per_x::Bool=true, per_y::Bool=true)
-    gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 1)
-    gmsh.option.setNumber("Mesh.Algorithm", 5)
-    gmsh.option.setNumber("General.Verbosity", geo.verbose)
-    gmsh.clear()
-    gmsh.model.add("geometry")
-
-    tt = TagTracker()
-    z0 = -(geo.hair + geo.hd + geo.hsub) / 2
-    L, R = -geo.L / 2, geo.L / 2
-
-    # ═══ Substrate ═══
-    fll = (L, geo.W / 2, z0, geo.l3)
-    flr = (R, geo.W / 2, z0, geo.l3)
-    ful = (L, geo.W / 2, z0 + geo.hsub, geo.l2)
-    fur = (R, geo.W / 2, z0 + geo.hsub, geo.l2)
-    bll = (L, -geo.W / 2, z0, geo.l3)
-    blr = (R, -geo.W / 2, z0, geo.l3)
-    bul = (L, -geo.W / 2, z0 + geo.hsub, geo.l2)
-    bur = (R, -geo.W / 2, z0 + geo.hsub, geo.l2)
-    sub_bx = box(tt, fll, flr, ful, fur, bll, blr, bul, bur)
-    z0 += geo.hsub
-
-    des_low = z0
-
-    # ═══ Design region ═══
-    ful = (L, geo.W / 2, z0 + geo.hd, geo.l2)
-    fur = (R, geo.W / 2, z0 + geo.hd, geo.l2)
-    bul = (L, -geo.W / 2, z0 + geo.hd, geo.l2)
-    bur = (R, -geo.W / 2, z0 + geo.hd, geo.l2)
-    des_bx = boxabove(sub_bx, tt,
-        sub_bx.p_ful, sub_bx.p_fur, ful, fur,
-        sub_bx.p_bul, sub_bx.p_bur, bul, bur)
-    z0 += geo.hd
-    des_high = z0
-
-    # ═══ Target/Raman region ═══
-    ful = (L, geo.W / 2, z0 + geo.ht, geo.l1)
-    fur = (R, geo.W / 2, z0 + geo.ht, geo.l1)
-    bul = (L, -geo.W / 2, z0 + geo.ht, geo.l1)
-    bur = (R, -geo.W / 2, z0 + geo.ht, geo.l1)
-    tar_bx = boxabove(des_bx, tt,
-        des_bx.p_ful, des_bx.p_fur, ful, fur,
-        des_bx.p_bul, des_bx.p_bur, bul, bur)
-
-    # ═══ Source region ═══
-    ful = (L, geo.W / 2, z0 + geo.hs, geo.l1)
-    fur = (R, geo.W / 2, z0 + geo.hs, geo.l1)
-    bul = (L, -geo.W / 2, z0 + geo.hs, geo.l1)
-    bur = (R, -geo.W / 2, z0 + geo.hs, geo.l1)
-    src_bx = boxabove(tar_bx, tt,
-        tar_bx.p_ful, tar_bx.p_fur, ful, fur,
-        tar_bx.p_bul, tar_bx.p_bur, bul, bur)
-
-    # ═══ Air region ═══
-    ful = (L, geo.W / 2, z0 + geo.hair, geo.l3)
-    fur = (R, geo.W / 2, z0 + geo.hair, geo.l1)
-    bul = (L, -geo.W / 2, z0 + geo.hair, geo.l3)
-    bur = (R, -geo.W / 2, z0 + geo.hair, geo.l3)
-    air_bx = boxabove(src_bx, tt,
-        src_bx.p_ful, src_bx.p_fur, ful, fur,
-        src_bx.p_bul, src_bx.p_bur, bul, bur)
-    z0 += geo.hair
-
-    # ═══ Periodic BCs ═══
-    gmsh.model.geo.synchronize()
-    for bx in [sub_bx, des_bx, tar_bx, src_bx, air_bx]
-        if per_x
-            gmsh.model.mesh.setPeriodic(2, [bx.ps_l], [bx.ps_r],
-                [1, 0, 0, -geo.L, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-        end
-        if per_y
-            gmsh.model.mesh.setPeriodic(2, [bx.ps_b], [bx.ps_f],
-                [1, 0, 0, 0, 0, 1, 0, -geo.W, 0, 0, 1, 0, 0, 0, 0, 1])
-        end
-    end
-
-    # ═══ Physical groups ═══
-    # Nodes for grid sizing
-    group(tt, 0, "DesignNodes", [
-        des_bx.p_fll, des_bx.p_flr, des_bx.p_bll, des_bx.p_blr,
-        des_bx.p_ful, des_bx.p_fur, des_bx.p_bul, des_bx.p_bur])
-
-    # Z boundaries (ABC)
-    group(tt, 2, "TopZ", [air_bx.ps_t])
-    group(tt, 2, "BottomZ", [sub_bx.ps_u])
-
-    # X/Y faces (for Dirichlet or periodic)
-    group(tt, 2, "FacesX", [
-        sub_bx.ps_l, sub_bx.ps_r, des_bx.ps_l, des_bx.ps_r,
-        tar_bx.ps_l, tar_bx.ps_r, src_bx.ps_l, src_bx.ps_r,
-        air_bx.ps_l, air_bx.ps_r])
-    group(tt, 2, "FacesY", [
-        sub_bx.ps_f, sub_bx.ps_b, des_bx.ps_f, des_bx.ps_b,
-        tar_bx.ps_f, tar_bx.ps_b, src_bx.ps_f, src_bx.ps_b,
-        air_bx.ps_f, air_bx.ps_b])
-
-    # Source and target surfaces
-    group(tt, 2, "Source", [src_bx.ps_t])
-    group(tt, 2, "Target", [tar_bx.ps_t])
-
-    # Volume groups
-    group(tt, 3, "Substrate", [sub_bx.vol])
-    group(tt, 3, "Design", [des_bx.vol])
-    group(tt, 3, "Raman", [tar_bx.vol])
-    group(tt, 3, "Air", [air_bx.vol, src_bx.vol])
-
-    # ═══ Generate mesh ═══
-    gmsh.model.geo.synchronize()
-    gmsh.model.mesh.generate(3)
-    gmsh.write(meshfile)
-    gmsh.finalize()
-
-    @info "Mesh generated: $meshfile"
-
-    return (des_low, des_high)
-end
-
-"""
-    genperiodic_legacy(geo, meshfile; per_x=true, per_y=true) -> (des_low, des_high)
-
-Generate periodic mesh using legacy box point order (Emitter3DTopOpt).
-"""
-function genperiodic_legacy(geo::SymmetricGeometry, meshfile::String; per_x::Bool=true, per_y::Bool=true)
+function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=true, per_y::Bool=true)
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 1)
     gmsh.option.setNumber("Mesh.Algorithm", 5)
@@ -521,14 +396,6 @@ function genperiodic_legacy(geo::SymmetricGeometry, meshfile::String; per_x::Boo
 
     return (des_low, des_high)
 end
-
-"""
-    genperiodic(geo, meshfile; per_x=true, per_y=true) -> (des_low, des_high)
-
-Primary periodic mesh generator (legacy, byte-for-byte port).
-"""
-genperiodic(geo::SymmetricGeometry, meshfile::String; per_x::Bool=true, per_y::Bool=true) =
-    genperiodic_legacy(geo, meshfile; per_x=per_x, per_y=per_y)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helpers

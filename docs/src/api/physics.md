@@ -7,10 +7,11 @@ Maxwell equation assembly and material properties.
 ```@docs
 refindex
 complex_index
+resolve_index
 plasmon_period
 ```
 
-## Maxwell Assembly
+## Maxwell assembly
 
 ```@docs
 PhysicalParams
@@ -18,7 +19,7 @@ assemble_maxwell
 assemble_source
 ```
 
-## Maxwell Solver
+## Maxwell solver
 
 ```@docs
 solve_forward!

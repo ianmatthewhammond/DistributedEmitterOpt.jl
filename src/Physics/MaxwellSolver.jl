@@ -1,150 +1,141 @@
 """
     MaxwellSolver
 
-High-level solve functions for MaxwellProblem that work with the new
-architecture (FieldConfig, SolverCachePool, Environment).
-
-These functions bridge the gap between the abstract problem definition
-and the existing assembly/solve routines in Maxwell.jl.
+Forward and adjoint Maxwell solves, plus PDE sensitivity assembly.
+Connects the problem definition (FieldConfig, Environment) to the
+low-level assembly routines in Maxwell.jl.
 """
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PhysicalParams construction from new types
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# PhysicalParams from FieldConfig + Environment
+# ---------------------------------------------------------------------------
 
 """
-    build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0.0)
+    build_phys_params(fc, env, sim; α=0.0)
 
-Construct PhysicalParams from a FieldConfig and Environment.
+Build PhysicalParams for a given FieldConfig and Environment.
 """
 function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0.0)
     λ = fc.λ
     ω = 2π / λ
 
-    # Resolve material indices at this wavelength
     nf = resolve_index(env.mat_fluid, λ)
     nm = resolve_index(env.mat_design, λ)
     ns = resolve_index(env.mat_substrate, λ)
 
-    # Get design region bounds from simulation
     des_low, des_high = getdesignz(sim.labels, sim.Ω)
 
     PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α)
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Forward solver
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 """
-    solve_forward!(pde::MaxwellProblem, pt, sim, pool) → Dict{CacheKey, CellField}
+    solve_forward!(pde, pt, sim, pool) -> Dict{CacheKey, CellField}
 
-Solve Maxwell equation for all unique field configurations.
-Returns a Dict mapping cache keys to electric field CellFields.
-
-Caches LU factorizations in the pool for reuse.
+Solve Maxwell for every unique field configuration.
+Caches LU factorizations in the pool.
 """
-function solve_forward!(pde::MaxwellProblem, pt, sim, pool::SolverCachePool)
+function solve_forward!(pde::MaxwellProblem, pt, sim, pool)
     fields = Dict{CacheKey,CellField}()
+    sim_base = default_sim(sim)
 
     for fc in all_configs(pde)
         key = cache_key(fc)
-        cache = get_cache!(pool, fc)
+        sim_fc = sim_for(sim, fc)
+        pool_fc = pool_for(pool, fc)
+        cache = get_cache!(pool_fc, fc)
 
-        # Build physical params for this config
-        phys = build_phys_params(fc, pde.env, sim; α=pde.α_loss)
+        phys = build_phys_params(fc, pde.env, sim_fc; α=pde.α_loss)
 
-        # Assemble and factorize if needed
         if !has_maxwell_factor(cache)
-            A = assemble_maxwell(pt, sim, phys)
+            pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
+            A = assemble_maxwell(pt_fc, sim_fc, phys)
             maxwell_lu!(cache, A)
         end
 
-        # Assemble source (polarization determines y vs x)
         source_y = (fc.polarization == :y)
-        b = assemble_source(sim, phys; source_y)
+        b = assemble_source(sim_fc, phys; source_y)
 
-        # Solve
         E_vec = maxwell_solve!(cache, b)
-
-        # Create CellField from solution vector
-        E = FEFunction(sim.U, E_vec)
+        E = FEFunction(sim_fc.U, E_vec)
         fields[key] = E
     end
 
     return fields
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Adjoint solver
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 """
-    solve_adjoint!(pde::MaxwellProblem, sources::Dict, sim, pool) → Dict{CacheKey, CellField}
+    solve_adjoint!(pde, sources, sim, pool) -> Dict{CacheKey, CellField}
 
-Solve adjoint Maxwell equations given adjoint sources (∂g/∂E).
-Returns a Dict mapping cache keys to adjoint field CellFields.
-
-Assumes Maxwell matrices are already factorized in the pool.
+Solve adjoint Maxwell for each adjoint source.
+Reuses the LU factors already in the pool.
 """
 function solve_adjoint!(pde::MaxwellProblem, sources::Dict{CacheKey,Vector{ComplexF64}},
-    sim, pool::SolverCachePool)
+    sim, pool)
     adjoints = Dict{CacheKey,CellField}()
 
     for (key, source) in sources
-        cache = get_cache!(pool, key)
-
-        # Solve adjoint: A' λ = source
+        fc = FieldConfig(key[1]; θ=key[2], pol=key[3])
+        sim_fc = sim_for(sim, fc)
+        pool_fc = pool_for(pool, fc)
+        cache = get_cache!(pool_fc, key)
         λ_vec = maxwell_solve_adjoint!(cache, source)
-
-        # Create CellField
-        λ = FEFunction(sim.U, λ_vec)
+        λ = FEFunction(sim_fc.U, λ_vec)
         adjoints[key] = λ
     end
 
     return adjoints
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PDE sensitivity (material sensitivity from adjoint)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# PDE sensitivity
+# ---------------------------------------------------------------------------
 
 """
-    pde_sensitivity(pde::MaxwellProblem, fields, adjoints, pf, pt, sim, control; space=sim.Pf)
+    pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim.Pf)
 
-Compute ∂g/∂pf from PDE (λᵀ ∂A/∂p E) for all field/adjoint pairs.
-Sums contributions from all configurations weighted appropriately.
+Compute dg/dpf from the PDE term (lambda^T dA/dp E), summed over all field configs.
 """
 function pde_sensitivity(pde::MaxwellProblem,
     fields::Dict{CacheKey,CellField},
     adjoints::Dict{CacheKey,CellField},
     pf, pt, sim, control;
-    space=sim.Pf)
+    space=default_sim(sim).Pf)
 
     ∂g_∂pf = zeros(Float64, num_free_dofs(space))
+    sim_base = default_sim(sim)
 
-    # Sum over all unique field configs; adjoint sources already include weights.
     for fc in all_configs(pde)
         key = cache_key(fc)
         if !haskey(fields, key) || !haskey(adjoints, key)
             continue
         end
 
+        sim_fc = sim_for(sim, fc)
         E = fields[key]
         λ = adjoints[key]
-        phys = build_phys_params(fc, pde.env, sim; α=pde.α_loss)
+        pf_fc = sim_fc === sim_base ? pf : map_field(pf, sim_fc, :Pf)
+        pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
+        phys = build_phys_params(fc, pde.env, sim_fc; α=pde.α_loss)
 
-        ∂g_∂pf .+= assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys, control; space)
+        ∂g_∂pf .+= assemble_material_sensitivity_pf(E, λ, pf_fc, pt_fc, sim_fc, phys, control; space)
     end
 
     return ∂g_∂pf
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Convenience: clear cached factors when design changes
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Cache invalidation
+# ---------------------------------------------------------------------------
 
-"""Clear Maxwell factorizations when pt changes significantly."""
+"""Clear all cached Maxwell factorizations."""
 function invalidate_maxwell_cache!(pool::SolverCachePool)
     clear_maxwell_factors!(pool)
 end

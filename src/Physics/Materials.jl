@@ -46,9 +46,15 @@ function refindex(material::String)
         # Split on whitespace (tabs or spaces)
         parts = split(strip(line))
         if length(parts) >= 3
-            push!(λ_raw, parse(Float64, parts[1]) * 1e3)  # Convert μm to nm
-            push!(n_raw, parse(Float64, parts[2]))
-            push!(k_raw, parse(Float64, parts[3]))
+            λ_val = tryparse(Float64, parts[1])
+            n_val = tryparse(Float64, parts[2])
+            k_val = tryparse(Float64, parts[3])
+            if isnothing(λ_val) || isnothing(n_val) || isnothing(k_val)
+                continue
+            end
+            push!(λ_raw, λ_val * 1e3)  # Convert μm to nm
+            push!(n_raw, n_val)
+            push!(k_raw, k_val)
         end
     end
 
@@ -77,7 +83,7 @@ Get complex refractive index n + ik at wavelength λ (nm).
 """
 function complex_index(material::String, λ::Float64)
     n_interp, k_interp = refindex(material)
-    n_interp(λ) + im * k_interp(λ)
+    n_interp(λ) - im * k_interp(λ)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════

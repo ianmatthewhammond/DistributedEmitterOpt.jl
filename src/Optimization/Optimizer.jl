@@ -1,28 +1,27 @@
 """
     Optimizer
 
-NLopt-based optimization with β-continuation scheduling.
-Supports CCSAQ (conservative convex separable approximation with quadratic).
+NLopt-based optimization with beta-continuation scheduling (CCSAQ algorithm).
 """
 
 import NLopt
 import NLopt: Opt, optimize
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main optimization entry point
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 """
-    optimize!(prob::OptimizationProblem; kwargs...) → (g_opt, p_opt)
+    optimize!(prob; kwargs...) -> (g_opt, p_opt)
 
-Run topology optimization with β-continuation for OptimizationProblem.
+Run topology optimization with beta-continuation.
 
-## Keyword Arguments
-- `max_iter` — Maximum iterations per β value (default: 40)
-- `β_schedule` — Sequence of projection steepness values
-- `α_schedule` — Optional loss schedule (same length as β_schedule)
-- `use_constraints` — Enable linewidth constraints
-- `tol` — Relative tolerance for convergence
+Keyword arguments:
+- `max_iter` -- iterations per beta value (default 40)
+- `β_schedule` -- projection steepness values to sweep
+- `α_schedule` -- optional loss schedule (same length as beta_schedule)
+- `use_constraints` -- enable linewidth constraints
+- `tol` -- relative tolerance for convergence
 """
 function optimize!(prob::OptimizationProblem;
     max_iter::Int=40,
@@ -34,14 +33,11 @@ function optimize!(prob::OptimizationProblem;
     p_opt = copy(prob.p)
     g_opt = 0.0
 
-    # β-continuation loop
     for (epoch, β) in enumerate(β_schedule)
         @info "Epoch $epoch: β = $β"
 
-        # Update control
         prob.control.β = β
 
-        # Update loss if scheduled
         if !isnothing(α_schedule) && epoch <= length(α_schedule)
             prob.pde = MaxwellProblem(
                 env=prob.pde.env,
@@ -51,60 +47,87 @@ function optimize!(prob::OptimizationProblem;
             )
         end
 
-        # Run epoch
         g_opt, p_opt, _ = run_epoch!(prob, max_iter, use_constraints, tol)
 
-        # Update state
         prob.p .= p_opt
         prob.g = g_opt
 
-        @info "  Epoch $epoch complete: g = $g_opt"
+        @info "  Epoch $epoch done: g = $g_opt"
     end
 
     return g_opt, p_opt
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Eigen optimization entry point (gradient TODO)
+# ---------------------------------------------------------------------------
+
+"""
+    optimize!(prob::EigenOptimizationProblem; kwargs...) -> (g_opt, p_opt)
+
+Run eigenvalue-based optimization with beta-continuation.
+Note: eigen sensitivities are TODO and will error during gradient evaluation.
+"""
+function optimize!(prob::EigenOptimizationProblem;
+    max_iter::Int=40,
+    β_schedule::Vector{Float64}=[8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0],
+    use_constraints::Bool=false,
+    tol::Float64=1e-8)
+
+    p_opt = copy(prob.p)
+    g_opt = 0.0
+
+    for (epoch, β) in enumerate(β_schedule)
+        @info "Epoch $epoch: β = $β"
+
+        prob.control.β = β
+
+        g_opt, p_opt, _ = run_epoch_eigen!(prob, max_iter, use_constraints, tol)
+
+        prob.p .= p_opt
+        prob.g = g_opt
+
+        @info "  Epoch $epoch done: g = $g_opt"
+    end
+
+    return g_opt, p_opt
+end
+
+# ---------------------------------------------------------------------------
 # Single epoch
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
-"""
-    run_epoch!(prob, max_iter, use_constraints, tol) → (g_opt, p_opt, grad)
-
-Run one epoch of optimization at fixed β.
-"""
+"""Run one epoch of optimization at fixed beta."""
 function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64)
     np = length(prob.p)
     ret_grad = zeros(Float64, np)
 
-    # Setup NLopt
     opt = Opt(:LD_CCSAQ, np)
     opt.lower_bounds = 0.0
     opt.upper_bounds = 1.0
     opt.ftol_rel = tol
     opt.maxeval = max_iter
 
-    # Objective callback
     opt.max_objective = function (p, grad)
         g = objective_and_gradient!(grad, p, prob)
         ret_grad .= grad
 
-        # Log iteration
         next_iteration!(prob)
         log_iteration!(prob, g, p)
 
         return g
     end
 
-    # Constraints (if enabled)
     if use_constraints
         if prob.foundry_mode
+            sim0 = default_sim(prob.sim)
             NLopt.inequality_constraint!(opt,
-                (p, g) -> glc_solid(p, g; sim=prob.sim, control=prob.control), 1e-8)
+                (p, g) -> glc_solid(p, g; sim=sim0, control=prob.control), 1e-8)
             NLopt.inequality_constraint!(opt,
-                (p, g) -> glc_void(p, g; sim=prob.sim, control=prob.control), 1e-8)
+                (p, g) -> glc_void(p, g; sim=sim0, control=prob.control), 1e-8)
         else
-            obj = (; sim=prob.sim, control=prob.control, cache_pump=prob.pool.filter_cache)
+            sim0 = default_sim(prob.sim)
+            obj = (; sim=sim0, control=prob.control, cache_pump=default_pool(prob.pool).filter_cache)
             NLopt.inequality_constraint!(opt,
                 (p, g) -> glc_solid_fe(p, g, obj), 1e-8)
             NLopt.inequality_constraint!(opt,
@@ -112,7 +135,6 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
         end
     end
 
-    # Optimize
     (g_opt, p_opt, ret) = optimize(opt, prob.p)
 
     @info "  NLopt: $ret after $(opt.numevals) evaluations"
@@ -120,20 +142,50 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     return g_opt, p_opt, ret_grad
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Logging
-# ═══════════════════════════════════════════════════════════════════════════════
+"""Run one epoch of eigen optimization at fixed beta."""
+function run_epoch_eigen!(prob::EigenOptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64)
+    if use_constraints
+        error("TODO: constraints for eigen optimization are not implemented")
+    end
 
-"""Log optimization iteration."""
+    np = length(prob.p)
+    ret_grad = zeros(Float64, np)
+
+    opt = Opt(:LD_CCSAQ, np)
+    opt.lower_bounds = 0.0
+    opt.upper_bounds = 1.0
+    opt.ftol_rel = tol
+    opt.maxeval = max_iter
+
+    opt.max_objective = function (p, grad)
+        g = objective_and_gradient!(grad, p, prob)
+        ret_grad .= grad
+
+        next_iteration!(prob)
+        log_iteration!(prob, g, p)
+
+        return g
+    end
+
+    (g_opt, p_opt, ret) = optimize(opt, prob.p)
+
+    @info "  NLopt: $ret after $(opt.numevals) evaluations"
+
+    return g_opt, p_opt, ret_grad
+end
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+"""Log iteration to console and optionally save checkpoint."""
 function log_iteration!(prob::OptimizationProblem, g, p)
     iter = prob.iteration
 
-    # Console output every 5 iterations
     if iter % 5 == 0
         @info "Iter $iter: g = $(round(g, sigdigits=4))"
     end
 
-    # Save checkpoint every 20 iterations
     if iter % 20 == 0
         save_checkpoint(prob, "iter_$(iter)")
     end
@@ -155,18 +207,18 @@ function save_checkpoint(prob::OptimizationProblem, name::String)
     # JLD2.save(filepath, data)
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Convenience
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
 
-"""Run single evaluation (no optimization)."""
+"""Single evaluation (no optimization loop)."""
 function evaluate(prob::OptimizationProblem, p::Vector{Float64})
     ∇g = zeros(Float64, length(p))
     g = objective_and_gradient!(∇g, p, prob)
     return g, ∇g
 end
 
-"""Test gradient with finite differences."""
+"""Finite-difference gradient check."""
 function test_gradient(prob::OptimizationProblem, p::Vector{Float64}; δ::Float64=1e-6)
     g0, ∇g = evaluate(prob, p)
 

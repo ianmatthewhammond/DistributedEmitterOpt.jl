@@ -1,23 +1,18 @@
 """
     SERS
 
-SERS objective utility functions: SO(3)-averaged trace formulation with optional damage model.
-
-This module provides the core building blocks used by SERSObjective.jl:
-- α_invariants, α_cellfields — Polarizability tensor processing
-- α̂ₚ² — The trace formula integrand
-- sumabs2 — Vector field magnitude
-- damage_factor, ∂damage_∂E — Molecular quenching model
+SO(3)-averaged trace formula for SERS enhancement, plus an optional
+molecular damage/quenching model. Used by SERSObjective.
 """
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Polarizability tensor invariants
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 """
-    α_invariants(αₚ::Matrix) -> (α_par², α_perp²)
+    α_invariants(αp) -> (α_par², α_perp²)
 
-Compute SO(3) invariants for orientational averaging.
+SO(3) invariants for orientational averaging of the Raman tensor.
 """
 function α_invariants(αₚ::Matrix{ComplexF64})
     β = 1.0
@@ -29,23 +24,21 @@ function α_invariants(αₚ::Matrix{ComplexF64})
     return α_par², α_perp²
 end
 
-"""Build CellField constants for α invariants over domain Ω."""
+"""Build CellField constants for the alpha invariants over Ω."""
 function α_cellfields(αₚ::Matrix{ComplexF64}, Ω)
     α_par², α_perp² = α_invariants(αₚ)
     CellField(α_par², Ω), CellField(α_perp², Ω)
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SO(3)-averaged integrand — THE CORE TRACE FORMULA
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Trace formula integrand
+# ---------------------------------------------------------------------------
 
 """
     α̂ₚ²(Ee, E′e, Ep, E′p, αc1, αc2) -> scalar
 
-SO(3)-averaged SERS intensity integrand (trace formula):
-  αc1 * (E′e·(Ep⊗E′p'·Ee)) + αc2 * (E′p'·Ep)(E′e·Ee) - αc2 * ...
-
-For elastic scattering (Ep = Ee) with identity αₚ, this reduces to |E|⁴.
+SO(3)-averaged SERS intensity integrand.
+For elastic scattering with identity αp, reduces to |E|^4.
 """
 function α̂ₚ²(Ee, E′e, Ep, E′p, αc1, αc2)
     return (
@@ -55,26 +48,25 @@ function α̂ₚ²(Ee, E′e, Ep, E′p, αc1, αc2)
     )
 end
 
-# Define Gridap.zero for α̂ₚ² to enable lazy composition
 Gridap.zero(::typeof(α̂ₚ²)) = 0.0
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Helper: |E|² for vector fields
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# |E|² helper
+# ---------------------------------------------------------------------------
 
-"""Sum of squared magnitudes for VectorValue."""
+"""Squared magnitude of a VectorValue."""
 sumabs2(E::VectorValue) = sum(abs.(Tuple(E)) .^ 2)
 sumabs2(E::CellField) = Operation(sumabs2)(E)
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Damage / quenching model
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 """
-    damage_factor(E², γ, E_th) -> Real
+    damage_factor(E²; γ, E_th) -> Real
 
-Molecular damage/quenching factor: attenuates SERS signal at high fields.
-Returns value in (0, 1] where 1 = no damage.
+Molecular quenching factor: attenuates SERS signal at high field intensity.
+Returns a value in (0, 1] (1 = no damage).
 """
 function damage_factor(E²::Real; γ::Float64, E_th::Float64)
     if E_th == Inf || !isfinite(γ)
@@ -84,7 +76,7 @@ function damage_factor(E²::Real; γ::Float64, E_th::Float64)
     return (isnan(val) || isinf(val)) ? 1.0 : val
 end
 
-"""Derivative of damage factor w.r.t. E."""
+"""Derivative of damage_factor with respect to E."""
 function ∂damage_∂E(E::VectorValue; γ::Float64, E_th::Float64)
     if E_th == Inf || !isfinite(γ)
         return E * 0.0

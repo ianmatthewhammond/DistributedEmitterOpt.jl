@@ -1,0 +1,20 @@
+- Look through the code one more time
+- Finish writing tests
+- Update documentation
+- More examples
+- Data from masters + from paper
+    - figures/ (pdf + generation scripts)
+    - test 
+- Clean out old artifacts
+- README that cites arXiv paper
+- Publish to GitHub + docs
+- Publish to julia registry
+- New features
+    - Eigensolver
+    - Pardiso
+    - MUMPS
+    - More high level control (e.g. periodicity + boundary condition setup)
+- E^2 regularization
+    - Nonlocal
+    - Plotting routines
+- Submit jobs on supercloud to recreate results

@@ -3,9 +3,22 @@ using DistributedEmitterOpt
 using Literate
 
 # Generate examples
-example_src = joinpath(@__DIR__, "src", "examples", "isotropic_3d.jl")
 example_dst = joinpath(@__DIR__, "src", "examples")
-Literate.markdown(example_src, example_dst; execute=false, documenter=true, codefence="```julia" => "```")
+example_sources = [
+    "metal_2d_image_eval.jl",
+    "anisotropic_3d_inelastic_optimization.jl",
+    "dielectric_2d_elastic_optimization.jl",
+]
+
+for example_src in example_sources
+    Literate.markdown(
+        joinpath(example_dst, example_src),
+        example_dst;
+        execute=false,
+        documenter=true,
+        codefence="```julia" => "```"
+    )
+end
 
 makedocs(
     sitename="DistributedEmitterOpt.jl",
@@ -21,7 +34,9 @@ makedocs(
         "Home" => "index.md",
         "Architecture" => "architecture.md",
         "Examples" => [
-            "Isotropic 3D Optimization" => "examples/isotropic_3d.md",
+            "Metal 2D Image Evaluation" => "examples/metal_2d_image_eval.md",
+            "Anisotropic 3D Inelastic Optimization" => "examples/anisotropic_3d_inelastic_optimization.md",
+            "Dielectric 2D Elastic Optimization" => "examples/dielectric_2d_elastic_optimization.md",
         ],
         "API Reference" => [
             "Types" => "api/types.md",
