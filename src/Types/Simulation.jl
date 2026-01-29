@@ -84,13 +84,18 @@ function build_simulation(meshfile::String;
     dir_y::Bool=true,
     source_y::Bool=true,
     foundry_mode::Bool=true,
-    sizes=nothing)
+    sizes=nothing,
+    model=nothing)
 
     sim = Simulation()
 
-    # Load mesh
-    sim.model = GmshDiscreteModel(meshfile)
-    sim.model = repair_gmsh_model(meshfile, sim.model)
+    # Load mesh (or reuse model)
+    if isnothing(model)
+        sim.model = GmshDiscreteModel(meshfile)
+        sim.model = repair_gmsh_model(meshfile, sim.model)
+    else
+        sim.model = model
+    end
 
     # Dirichlet tags
     dirichlet_tags = String[]

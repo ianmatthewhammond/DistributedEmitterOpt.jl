@@ -1,15 +1,8 @@
 """
     OptimizationProblem
 
-Main container for topology optimization. Holds PDE configuration, objective
-function, FEM infrastructure, solver caches, and optimization state.
-
-This replaces the old `Objective` type with cleaner separation of concerns:
-- `pde::MaxwellProblem` — PDE configuration (materials, field configs)
-- `objective::ObjectiveFunction` — How to compute g from fields (SERS, uLED, etc.)
-- `sim::Simulation` — FEM discretization
-- `pool::SolverCachePool` — Deduplicated solver caches
-- `control::Control` — Optimization hyperparameters
+Main container for topology optimization. Holds the PDE config, objective,
+FEM infrastructure, solver caches, and current optimization state.
 """
 mutable struct OptimizationProblem{PDE<:MaxwellProblem,Obj<:ObjectiveFunction}
     # Problem definition
@@ -17,49 +10,49 @@ mutable struct OptimizationProblem{PDE<:MaxwellProblem,Obj<:ObjectiveFunction}
     objective::Obj
 
     # FEM infrastructure
-    sim::Simulation
+    sim::Union{Simulation,SimulationBundle}
 
     # DOF mode
     foundry_mode::Bool
 
-    # Solver caches (deduplicated)
-    pool::SolverCachePool
+    # Solver caches (deduplicated across field configs)
+    pool::Union{SolverCachePool,SolverPoolBundle}
 
-    # Control (optimization hyperparameters only)
+    # Hyperparameters
     control::Control
 
     # State
-    p::Vector{Float64}       # Current design
-    g::Float64               # Current objective value
-    ∇g::Vector{Float64}      # Current gradient
+    p::Vector{Float64}       # current design
+    g::Float64               # current objective value
+    ∇g::Vector{Float64}      # current gradient
 
     # Metadata
-    root::String             # Output directory
-    iteration::Int           # Current iteration
+    root::String             # output directory
+    iteration::Int           # iteration counter
 end
 
 Base.show(io::IO, prob::OptimizationProblem) =
     print(io, "OptimizationProblem($(typeof(prob.objective)), np=$(length(prob.p)))")
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Construction
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 """
     OptimizationProblem(pde, objective, sim, solver; kwargs...)
 
-Construct optimization problem with separated PDE and objective.
+Build an optimization problem from a PDE definition and objective.
 
-## Arguments
-- `pde` — MaxwellProblem (or will be constructed from kwargs)
-- `objective` — ObjectiveFunction (e.g., SERSObjective)
-- `sim` — Simulation container
-- `solver` — AbstractSolver for cache pool
+Arguments:
+- `pde` -- MaxwellProblem
+- `objective` -- ObjectiveFunction (e.g. SERSObjective)
+- `sim` -- Simulation
+- `solver` -- AbstractSolver for cache pool
 
-## Keyword Arguments
-- `foundry_mode` — Use 2D DOFs (default: true)
-- `control` — Control hyperparameters
-- `root` — Output directory
+Keyword arguments:
+- `foundry_mode` -- use 2D DOFs (default true)
+- `control` -- optimization hyperparameters
+- `root` -- output directory
 """
 function OptimizationProblem(
     pde::MaxwellProblem,
@@ -70,10 +63,8 @@ function OptimizationProblem(
     control::Control=Control(),
     root::String="./data/"
 )
-    # Create cache pool
     pool = SolverCachePool(solver)
 
-    # Initialize state
     np = sim.np
     p = zeros(Float64, np)
     g = 0.0
@@ -94,16 +85,144 @@ function OptimizationProblem(
     )
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
+function OptimizationProblem(
+    pde::MaxwellProblem,
+    objective::ObjectiveFunction,
+    sim::SimulationBundle,
+    solver::AbstractSolver;
+    foundry_mode::Bool=true,
+    control::Control=Control(),
+    root::String="./data/"
+)
+    pool = SolverPoolBundle(solver, sim)
+
+    np = default_sim(sim).np
+    p = zeros(Float64, np)
+    g = 0.0
+    ∇g = zeros(Float64, np)
+
+    OptimizationProblem(
+        pde,
+        objective,
+        sim,
+        foundry_mode,
+        pool,
+        control,
+        p,
+        g,
+        ∇g,
+        root,
+        0
+    )
+end
+
+function OptimizationProblem(
+    pde::MaxwellProblem,
+    objective::ObjectiveFunction,
+    meshfile::String,
+    solver::AbstractSolver;
+    per_x::Bool=false,
+    per_y::Bool=false,
+    foundry_mode::Bool=false,
+    order::Int=0,
+    degree::Int=4,
+    control::Control=Control(),
+    root::String="./data/"
+)
+    sim = build_simulation_bundle(meshfile;
+        per_x,
+        per_y,
+        foundry_mode,
+        order,
+        degree
+    )
+    OptimizationProblem(pde, objective, sim, solver; foundry_mode, control, root)
+end
+
+# ---------------------------------------------------------------------------
+# Eigen optimization problem
+# ---------------------------------------------------------------------------
+
+"""
+    EigenOptimizationProblem
+
+Container for eigenvalue-based optimization. Mirrors OptimizationProblem but
+uses EigenProblem + eigen objectives.
+"""
+mutable struct EigenOptimizationProblem{Obj<:AbstractEigenObjective}
+    # Problem definition
+    pde::EigenProblem
+    objective::Obj
+
+    # FEM infrastructure
+    sim::Simulation
+
+    # DOF mode
+    foundry_mode::Bool
+
+    # Solver caches
+    pool::SolverCachePool
+
+    # Hyperparameters
+    control::Control
+
+    # State
+    p::Vector{Float64}
+    g::Float64
+    ∇g::Vector{Float64}
+
+    # Metadata
+    root::String
+    iteration::Int
+end
+
+Base.show(io::IO, prob::EigenOptimizationProblem) =
+    print(io, "EigenOptimizationProblem($(typeof(prob.objective)), np=$(length(prob.p)))")
+
+"""
+    EigenOptimizationProblem(pde, objective, sim, solver; kwargs...)
+
+Build an eigen optimization problem.
+"""
+function EigenOptimizationProblem(
+    pde::EigenProblem,
+    objective::AbstractEigenObjective,
+    sim::Simulation,
+    solver::AbstractSolver;
+    foundry_mode::Bool=true,
+    control::Control=Control(),
+    root::String="./data/"
+)
+    pool = SolverCachePool(solver)
+    np = sim.np
+    p = zeros(Float64, np)
+    g = 0.0
+    ∇g = zeros(Float64, np)
+
+    EigenOptimizationProblem(
+        pde,
+        objective,
+        sim,
+        foundry_mode,
+        pool,
+        control,
+        p,
+        g,
+        ∇g,
+        root,
+        0
+    )
+end
+
+# ---------------------------------------------------------------------------
 # Convenience constructors
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
 """
     OptimizationProblem(sim, solver; λ, λ_emission=nothing, ...)
 
-Convenience constructor for SERS optimization.
-- If `λ_emission` is nothing, uses elastic scattering (emission = pump)
-- If `λ_emission` is provided, uses inelastic (Stokes) scattering
+Shorthand for SERS optimization. If `λ_emission` is nothing, uses elastic
+scattering; otherwise inelastic (Stokes).
 """
 function OptimizationProblem(
     sim::Simulation,
@@ -120,7 +239,7 @@ function OptimizationProblem(
     env = Environment(mat_design=mat_design, mat_fluid=mat_fluid)
 
     outputs = if isnothing(λ_emission)
-        FieldConfig[]  # Elastic: empty outputs means reuse inputs
+        FieldConfig[]  # elastic: empty outputs means reuse inputs
     else
         [FieldConfig(λ_emission, θ=θ, pol=pol)]
     end
@@ -130,51 +249,57 @@ function OptimizationProblem(
     OptimizationProblem(pde, obj, sim, solver; kwargs...)
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 # Accessors
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
 
-"""Get number of design DOFs."""
+"""Number of design DOFs."""
 num_dofs(prob::OptimizationProblem) = length(prob.p)
 
-"""Update iteration counter."""
+"""Increment and return the iteration counter."""
 next_iteration!(prob::OptimizationProblem) = (prob.iteration += 1; prob.iteration)
 
-"""Get environment from PDE."""
+"""Number of design DOFs (eigen optimization)."""
+num_dofs(prob::EigenOptimizationProblem) = length(prob.p)
+
+"""Increment and return the iteration counter (eigen optimization)."""
+next_iteration!(prob::EigenOptimizationProblem) = (prob.iteration += 1; prob.iteration)
+
+"""Get environment from the PDE."""
 environment(prob::OptimizationProblem) = prob.pde.env
 
 """Is this elastic scattering?"""
 is_elastic(prob::OptimizationProblem) = is_elastic(prob.pde)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main interface (stubs — implemented in gradient coordinator)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Main interface (implemented in GradientCoordinator)
+# ---------------------------------------------------------------------------
 
 """
-    objective_and_gradient!(∇g, p, prob) → Float64
+    objective_and_gradient!(grad, p, prob) -> Float64
 
-Unified forward+adjoint pass. This is the main entry point for optimization.
+Forward + adjoint pass. Main entry point for optimization.
 """
 function objective_and_gradient! end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Initialization helpers
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Initialization
+# ---------------------------------------------------------------------------
 
-"""Initialize design with uniform value."""
+"""Set all design parameters to `value`."""
 function init_uniform!(prob::OptimizationProblem, value::Float64=0.5)
     fill!(prob.p, value)
     return prob
 end
 
-"""Initialize design with random values."""
+"""Randomize design parameters."""
 function init_random!(prob::OptimizationProblem; seed=nothing)
     !isnothing(seed) && Random.seed!(seed)
     prob.p .= rand(length(prob.p))
     return prob
 end
 
-"""Initialize design from file."""
+"""Load design parameters from a file."""
 function init_from_file!(prob::OptimizationProblem, filepath::String)
     prob.p .= vec(load(filepath)["p"])
     return prob

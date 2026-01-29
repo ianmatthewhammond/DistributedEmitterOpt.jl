@@ -10,7 +10,7 @@ Materials can be specified as:
 const MaterialSpec = Union{String,Float64}
 
 """
-    Environment(; mat_design, mat_substrate=nothing, mat_fluid=1.33)
+    Environment(; mat_design, mat_substrate=mat_design, mat_fluid=1.33)
 
 ## Fields
 - `mat_design` — Design region material (typically metal)
@@ -36,7 +36,7 @@ Get complex refractive index at wavelength λ (nm).
 """
 function resolve_index(mat::String, λ::Float64)::ComplexF64
     n_interp, k_interp = get_interp(mat)
-    n_interp(λ) + im * k_interp(λ)
+    n_interp(λ) - im * k_interp(λ)
 end
 
 resolve_index(n::Float64, λ::Float64)::ComplexF64 = n + 0.0im

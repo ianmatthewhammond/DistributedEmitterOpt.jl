@@ -43,37 +43,42 @@ function compute_objective(obj::SERSObjective, pde::MaxwellProblem, fields::Dict
     inputs = pde.inputs
     outputs = effective_outputs(pde)
 
-    αc1, αc2 = α_cellfields(obj.αₚ, sim.Ω)
-
     g = 0.0
+    sim_base = default_sim(sim)
 
     for fc_in in inputs
         key_in = cache_key(fc_in)
         haskey(fields, key_in) || continue
+        sim_in = sim_for(sim, fc_in)
         Ep = fields[key_in]
-
-        dmg = if obj.use_damage_model
-            (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep)
-        else
-            1.0
-        end
 
         for fc_out in outputs
             key_out = cache_key(fc_out)
             haskey(fields, key_out) || continue
+            sim_out = sim_for(sim, fc_out)
             Ee = fields[key_out]
 
             weight = fc_in.weight * fc_out.weight
+            # Map pump to output sim if needed
+            Ep_out = sim_out === sim_in ? Ep : map_field(Ep, sim_out, :U)
+            pt_out = sim_out === sim_base ? pt : map_pt(pt, sim_out)
+            αc1, αc2 = α_cellfields(obj.αₚ, sim_out.Ω)
+            dmg = if obj.use_damage_model
+                (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep_out)
+            else
+                1.0
+            end
+
             Ee_conj = Ee'
-            integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)
+            integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep_out, Ep_out, αc1, αc2)
 
             if obj.volume
-                g += weight * real(sum(∫(dmg * integrand)sim.dΩ_raman))
-                g += weight * real(sum(∫(dmg * (integrand - integrand * pt))sim.dΩ_design))
+                g += weight * real(sum(∫(dmg * integrand)sim_out.dΩ_raman))
+                g += weight * real(sum(∫(dmg * (integrand - integrand * pt_out))sim_out.dΩ_design))
             end
 
             if obj.surface
-                g += weight * real(sum(∫(dmg * (pt * (integrand - integrand * pt)))sim.dΩ_design))
+                g += weight * real(sum(∫(dmg * (pt_out * (integrand - integrand * pt_out)))sim_out.dΩ_design))
             end
         end
     end
@@ -91,15 +96,15 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
     inputs = pde.inputs
     outputs = effective_outputs(pde)
 
-    αc1, αc2 = α_cellfields(obj.αₚ, sim.Ω)
-    nV = num_free_dofs(sim.V)
-
     sources = Dict{CacheKey,Vector{ComplexF64}}()
+    sim_base = default_sim(sim)
 
     for fc_in in inputs
         key_in = cache_key(fc_in)
         haskey(fields, key_in) || continue
+        sim_in = sim_for(sim, fc_in)
         Ep = fields[key_in]
+        nV_in = num_free_dofs(sim_in.V)
 
         dmg = if obj.use_damage_model
             (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep)
@@ -114,12 +119,13 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
         end
 
         bp = get!(sources, key_in) do
-            zeros(ComplexF64, nV)
+            zeros(ComplexF64, nV_in)
         end
 
         for fc_out in outputs
             key_out = cache_key(fc_out)
             haskey(fields, key_out) || continue
+            sim_out = sim_for(sim, fc_out)
             Ee = fields[key_out]
 
             weight = fc_in.weight * fc_out.weight
@@ -127,57 +133,74 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
             coef_p = is_elastic ? 4.0 : 2.0
             Ee_conj = Ee'
 
+            # Map to input sim for pump adjoint
+            Ee_in = sim_out === sim_in ? Ee : map_field(Ee, sim_in, :U)
+            Ee_conj_in = Ee_in'
+            pt_in = sim_in === sim_base ? pt : map_pt(pt, sim_in)
+            αc1_in, αc2_in = α_cellfields(obj.αₚ, sim_in.Ω)
+
             if obj.volume
-                bp .+= weight * assemble_vector(sim.V) do v
+                bp .+= weight * assemble_vector(sim_in.V) do v
                     ∫(
-                        coef_p * (α̂ₚ² ∘ (Ee, Ee_conj, Ep, v, αc1, αc2)) * dmg +
+                        coef_p * (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) * dmg +
                         (obj.use_damage_model ?
-                         (α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)) * (v ⋅ ∂dmg) : 0.0)
-                    )sim.dΩ_raman
+                         (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) * (v ⋅ ∂dmg) : 0.0)
+                    )sim_in.dΩ_raman
                 end
 
-                bp .+= weight * assemble_vector(sim.V) do v
+                bp .+= weight * assemble_vector(sim_in.V) do v
                     ∫(
-                        coef_p * ((α̂ₚ² ∘ (Ee, Ee_conj, Ep, v, αc1, αc2)) -
-                                  (α̂ₚ² ∘ (Ee, Ee_conj, Ep, v, αc1, αc2)) * pt) * dmg +
+                        coef_p * ((α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) -
+                                  (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) * pt_in) * dmg +
                         (obj.use_damage_model ?
-                         ((α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)) -
-                          (α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)) * pt) * (v ⋅ ∂dmg) : 0.0)
-                    )sim.dΩ_design
+                         ((α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) -
+                          (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) * pt_in) * (v ⋅ ∂dmg) : 0.0)
+                    )sim_in.dΩ_design
                 end
             end
 
             if obj.surface
-                bp .+= weight * assemble_vector(sim.V) do v
+                bp .+= weight * assemble_vector(sim_in.V) do v
                     ∫(
-                        coef_p * (pt * ((α̂ₚ² ∘ (Ee, Ee_conj, Ep, v, αc1, αc2)) -
-                                        (α̂ₚ² ∘ (Ee, Ee_conj, Ep, v, αc1, αc2)) * pt)) * dmg +
+                        coef_p * (pt_in * ((α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) -
+                                        (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) * pt_in)) * dmg +
                         (obj.use_damage_model ?
-                         pt * ((α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)) -
-                               (α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)) * pt) * (v ⋅ ∂dmg) : 0.0)
-                    )sim.dΩ_design
+                         pt_in * ((α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) -
+                               (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) * pt_in) * (v ⋅ ∂dmg) : 0.0)
+                    )sim_in.dΩ_design
                 end
             end
 
             if !is_elastic
+                nV_out = num_free_dofs(sim_out.V)
                 be = get!(sources, key_out) do
-                    zeros(ComplexF64, nV)
+                    zeros(ComplexF64, nV_out)
+                end
+
+                # Map pump to output sim for emission adjoint
+                Ep_out = sim_out === sim_in ? Ep : map_field(Ep, sim_out, :U)
+                pt_out = sim_out === sim_base ? pt : map_pt(pt, sim_out)
+                αc1_out, αc2_out = α_cellfields(obj.αₚ, sim_out.Ω)
+                dmg_out = if obj.use_damage_model
+                    (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep_out)
+                else
+                    1.0
                 end
 
                 if obj.volume
-                    be .+= weight * assemble_vector(sim.V) do v
-                        ∫(2.0 * (α̂ₚ² ∘ (Ee, v, Ep, Ep, αc1, αc2)) * dmg)sim.dΩ_raman
+                    be .+= weight * assemble_vector(sim_out.V) do v
+                        ∫(2.0 * (α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) * dmg_out)sim_out.dΩ_raman
                     end
-                    be .+= weight * assemble_vector(sim.V) do v
-                        ∫(2.0 * ((α̂ₚ² ∘ (Ee, v, Ep, Ep, αc1, αc2)) -
-                                 (α̂ₚ² ∘ (Ee, v, Ep, Ep, αc1, αc2)) * pt) * dmg)sim.dΩ_design
+                    be .+= weight * assemble_vector(sim_out.V) do v
+                        ∫(2.0 * ((α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) -
+                                 (α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) * pt_out) * dmg_out)sim_out.dΩ_design
                     end
                 end
 
                 if obj.surface
-                    be .+= weight * assemble_vector(sim.V) do v
-                        ∫(2.0 * (pt * ((α̂ₚ² ∘ (Ee, v, Ep, Ep, αc1, αc2)) -
-                                       (α̂ₚ² ∘ (Ee, v, Ep, Ep, αc1, αc2)) * pt)) * dmg)sim.dΩ_design
+                    be .+= weight * assemble_vector(sim_out.V) do v
+                        ∫(2.0 * (pt_out * ((α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) -
+                                       (α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) * pt_out)) * dmg_out)sim_out.dΩ_design
                     end
                 end
             end
@@ -193,7 +216,7 @@ end
 Explicit ∂g/∂pf term from objective's direct dependence on pt.
 Sums contributions over all input/output combinations with weights.
 """
-function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::Dict, pf, pt, sim, control; space=sim.Pf)
+function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::Dict, pf, pt, sim, control; space=default_sim(sim).Pf)
     if !obj.volume && !obj.surface
         return zeros(Float64, num_free_dofs(space))
     end
@@ -201,41 +224,47 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
     inputs = pde.inputs
     outputs = effective_outputs(pde)
 
-    αc1, αc2 = α_cellfields(obj.αₚ, sim.Ω)
-    ∇pf = ∇(pf)
-
     ∂g_∂pf = zeros(Float64, num_free_dofs(space))
+    sim_base = default_sim(sim)
 
     for fc_in in inputs
         key_in = cache_key(fc_in)
         haskey(fields, key_in) || continue
+        sim_in = sim_for(sim, fc_in)
         Ep = fields[key_in]
-
-        dmg = if obj.use_damage_model
-            (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep)
-        else
-            1.0
-        end
 
         for fc_out in outputs
             key_out = cache_key(fc_out)
             haskey(fields, key_out) || continue
+            sim_out = sim_for(sim, fc_out)
             Ee = fields[key_out]
 
             weight = fc_in.weight * fc_out.weight
             Ee_conj = Ee'
-            integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep, Ep, αc1, αc2)
 
-            contrib = assemble_vector(space) do v
+            Ep_out = sim_out === sim_in ? Ep : map_field(Ep, sim_out, :U)
+            dmg = if obj.use_damage_model
+                (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep_out)
+            else
+                1.0
+            end
+            pf_out = sim_out === sim_base ? pf : map_field(pf, sim_out, :Pf)
+            pt_out = sim_out === sim_base ? pt : map_pt(pt, sim_out)
+            ∇pf_out = ∇(pf_out)
+            αc1_out, αc2_out = α_cellfields(obj.αₚ, sim_out.Ω)
+
+            integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep_out, Ep_out, αc1_out, αc2_out)
+
+            contrib = assemble_vector(sim_out.Pf) do v
                 term = 0.0
                 if obj.volume
                     term += dmg * (-real(integrand))
                 end
                 if obj.surface
-                    term += dmg * real(integrand - 2 * integrand * pt)
+                    term += dmg * real(integrand - 2 * integrand * pt_out)
                 end
-                ∫((((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)) *
-                  term)sim.dΩ_design
+                ∫((((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf_out, ∇pf_out)) *
+                  term)sim_out.dΩ_design
             end
 
             ∂g_∂pf .+= weight .* contrib

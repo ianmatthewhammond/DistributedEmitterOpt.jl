@@ -1,103 +1,105 @@
-# Architecture Guide
+# Architecture
 
-This document explains the type system and data flow in DistributedEmitterOpt.jl.
+How the types and data flow are organized.
 
-## Core Types
+## Types
 
 ### MaxwellProblem
 
-Defines **what PDEs to solve** — the physics configuration.
+Specifies the physics: which PDEs to solve.
 
 ```julia
 struct MaxwellProblem
-    env::Environment              # Materials
-    inputs::Vector{FieldConfig}   # Pump wavelengths
-    outputs::Vector{FieldConfig}  # Emission wavelengths (or same as inputs)
-    α_loss::Float64               # Absorption weighting
+    env::Environment              # materials
+    inputs::Vector{FieldConfig}   # pump wavelengths
+    outputs::Vector{FieldConfig}  # emission wavelengths (or same as inputs)
+    α_loss::Float64               # absorption weighting
 end
 ```
 
-**Environment** encapsulates material properties:
+`Environment` holds material properties:
 ```julia
-Environment(mat_design="Ag", mat_substrate="SiO2", mat_fluid=1.33)
+Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
 ```
 
-**FieldConfig** defines a single solve:
+`FieldConfig` describes a single solve:
 ```julia
 FieldConfig(λ=532.0, θ=0.0, pol=:y, weight=1.0)
 ```
 
 ### ObjectiveFunction
 
-Abstract type for optimization targets. Implementations must provide:
+Abstract type. Implementations must provide three methods:
 
 ```julia
-compute_objective(obj, fields, pt, sim)          # g(E)
-compute_adjoint_sources(obj, fields, pt, sim)    # ∂g/∂E
-explicit_sensitivity(obj, fields, pf, pt, sim, control)  # ∂g/∂pf
+compute_objective(obj, pde, fields, pt, sim)          # g(E)
+compute_adjoint_sources(obj, pde, fields, pt, sim)    # dg/dE
+explicit_sensitivity(obj, pde, fields, pf, pt, sim, control)  # dg/dpf
 ```
 
-**SERSObjective** implements SERS enhancement with the trace formula:
+`SERSObjective` implements this for the SO(3)-averaged trace formula:
 ```julia
-SERSObjective(αₚ=I(3), volume=true, surface=false, use_damage=false)
+SERSObjective(αp=I(3), volume=true, surface=false, use_damage_model=false)
 ```
 
 ### OptimizationProblem
 
-The main container that ties everything together:
+Ties everything together:
 
 ```julia
 mutable struct OptimizationProblem{PDE,Obj}
     pde::MaxwellProblem
     objective::ObjectiveFunction
     sim::Simulation
+    foundry_mode::Bool
     pool::SolverCachePool
     control::Control
-    p::Vector{Float64}      # Design parameters
-    g::Float64              # Current objective
-    ∇g::Vector{Float64}     # Current gradient
+    p::Vector{Float64}      # design parameters
+    g::Float64              # current objective
+    grad::Vector{Float64}   # current gradient
 end
 ```
 
-## Optimization Flow
+## Optimization flow
 
 ```
 p (design params)
-    │
-    ▼ filter_grid / filter_helmholtz!
+    |
+    v  filter_grid (foundry) / filter_helmholtz! (3D)
 pf (filtered)
-    │
-    ▼ project_ssp
-pt (projected, binary-ish)
-    │
-    ▼ solve_forward! (Maxwell for each FieldConfig)
+    |
+    v  interpolate grid->mesh (foundry only)
+    v  project_ssp
+pt (projected, near-binary)
+    |
+    v  solve_forward! (Maxwell for each FieldConfig)
 E_fields
-    │
-    ├──▶ compute_objective → g
-    │
-    ▼ compute_adjoint_sources → b_adj
-    │
-    ▼ solve_adjoint! (reuse LU)
-λ_fields
-    │
-    ▼ pde_sensitivity + explicit_sensitivity
-∂g/∂pf
-    │
-    ▼ filter_adjoint
-∂g/∂p (gradient)
+    |
+    |-->  compute_objective -> g
+    |
+    v  compute_adjoint_sources -> b_adj
+    |
+    v  solve_adjoint! (reuses the LU factors)
+lambda_fields
+    |
+    v  pde_sensitivity + explicit_sensitivity
+dg/dpf
+    |
+    v  filter_adjoint
+dg/dp (gradient)
 ```
 
-## Key Functions
+## Key functions
 
-| Function | Purpose |
-|----------|---------|
+| Function | What it does |
+|----------|--------------|
 | `solve_forward!(pde, pt, sim, pool)` | Solve Maxwell for all FieldConfigs |
-| `solve_adjoint!(pde, sources, sim, pool)` | Reuse LU factors for adjoint |
-| `pde_sensitivity(...)` | Material derivative ∂A/∂pf · λ |
-| `objective_and_gradient!(∇g, p, prob)` | Main entry point |
-| `optimize!(prob)` | NLopt with β-continuation |
+| `solve_adjoint!(pde, sources, sim, pool)` | Reuse LU factors for the adjoint |
+| `pde_sensitivity(...)` | Material derivative lambda^T dA/dp E |
+| `objective_and_gradient!(grad, p, prob)` | Main entry point |
+| `optimize!(prob)` | NLopt with beta-continuation |
 
-## Adding New Objectives
+## Writing a new objective
 
 1. Create `Objectives/MyObjective.jl`:
 ```julia
@@ -105,24 +107,25 @@ struct MyObjective <: ObjectiveFunction
     # params
 end
 
-compute_objective(obj::MyObjective, fields, pt, sim) = ...
-compute_adjoint_sources(obj::MyObjective, fields, pt, sim) = ...
+compute_objective(obj::MyObjective, pde, fields, pt, sim) = ...
+compute_adjoint_sources(obj::MyObjective, pde, fields, pt, sim) = ...
+explicit_sensitivity(obj::MyObjective, pde, fields, pf, pt, sim, control) = ...
 ```
 
-2. Include in `DistributedEmitterOpt.jl` and export.
+2. Include it in `DistributedEmitterOpt.jl` and export.
 
-3. Create problem:
+3. Use it:
 ```julia
 prob = OptimizationProblem(pde, MyObjective(...), sim, solver)
 ```
 
-## File Organization
+## File organization
 
-| Directory | Contents |
-|-----------|----------|
+| Directory | What's in it |
+|-----------|-------------|
 | `Types/` | FieldConfig, Environment, MaxwellProblem, OptimizationProblem, Control, Simulation, SolverCache |
 | `Physics/` | Maxwell assembly, SERS utilities, MaxwellSolver |
-| `Objectives/` | SERSObjective (future: uLEDObjective) |
+| `Objectives/` | SERSObjective |
 | `TopologyOpt/` | Filtering (Helmholtz, grid), SSP projection |
 | `Optimization/` | Optimizer (NLopt), GradientCoordinator |
 | `Solvers/` | UmfpackSolver (LU wrapper) |

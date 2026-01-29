@@ -17,6 +17,7 @@ abstract type AbstractSolver end
 Caches LU factorizations for reuse across optimization iterations.
 Separate caches for:
 - Maxwell system (complex, A_factor)
+- Eigen shift system (complex, A_factor in eigen_cache)
 - Filter PDE (real, F_factor)
 
 ## Fields
@@ -62,6 +63,22 @@ function maxwell_solve_adjoint!(cache::SolverCache, b::Vector)
     solve_adjoint!(cache.solver, cache.A_factor, b)
 end
 
+"""Factorize eigen shift matrix (A - σE)."""
+function eigen_lu!(cache::SolverCache, A)
+    cache.A_factor = lu!(cache.solver, A)
+end
+
+"""Solve eigen shift system."""
+function eigen_solve!(cache::SolverCache, b::Vector)
+    cache.x = solve!(cache.solver, cache.A_factor, b)
+    return cache.x
+end
+
+"""Solve adjoint eigen shift system."""
+function eigen_solve_adjoint!(cache::SolverCache, b::Vector)
+    solve_adjoint!(cache.solver, cache.A_factor, b)
+end
+
 """Factorize filter Helmholtz matrix."""
 function filter_lu!(cache::SolverCache, A)
     cache.F_factor = filter_lu!(cache.solver, A)
@@ -89,6 +106,7 @@ end
 """Check if factorization is cached."""
 has_maxwell_factor(cache::SolverCache) = !isnothing(cache.A_factor)
 has_filter_factor(cache::SolverCache) = !isnothing(cache.F_factor)
+has_eigen_factor(cache::SolverCache) = !isnothing(cache.A_factor)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cache Pool — deduplicates caches by (λ, θ, polarization) key
@@ -102,21 +120,25 @@ const CacheKey = Tuple{Float64,Float64,Symbol}
 Pool of solver caches, one per unique (λ, θ, polarization) configuration.
 Deduplicates caches so identical configs share the same LU factorization.
 
-Also holds a shared filter cache since filtering is independent of frequency/angle.
+Also holds a shared filter cache and a shared eigen cache for shift-invert solves.
 """
 mutable struct SolverCachePool{S<:AbstractSolver}
     caches::Dict{CacheKey,SolverCache{S}}
     filter_cache::SolverCache{S}  # Shared for all filter operations
+    eigen_cache::SolverCache{S}   # Shared eigen (shift-invert) cache
     solver::S
     am_head::Bool
+    eigen_shift::Union{Nothing,Float64}
 end
 
 function SolverCachePool(solver::S; am_head::Bool=true) where S<:AbstractSolver
     SolverCachePool{S}(
         Dict{CacheKey,SolverCache{S}}(),
         SolverCache{S}(solver; am_head),
+        SolverCache{S}(solver; am_head),
         solver,
-        am_head
+        am_head,
+        nothing
     )
 end
 
@@ -145,3 +167,8 @@ function clear_maxwell_factors!(pool::SolverCachePool)
     end
 end
 
+"""Clear eigen (shift-invert) factorization."""
+function clear_eigen_factors!(pool::SolverCachePool)
+    pool.eigen_cache.A_factor = nothing
+    pool.eigen_shift = nothing
+end
