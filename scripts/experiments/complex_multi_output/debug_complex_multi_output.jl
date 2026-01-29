@@ -32,11 +32,8 @@ function build_complex_problem(; outdir::String=OUTDIR)
     meshfile = "/Users/ianhammond/GitHub/DistributedEmitterOpt.jl/scripts/experiments/isotropic_3d_volume_old_sandbox/mesh.msh"
 
     # 3D DOF mode
-    # Open boundaries (Periodic or ABC usually required, but for debug we disable Dirichlet triggers)
-    # dir_x/dir_y=false implies natural or periodic depending on mesh/space construction.
-    # Given we are not calling genperiodic, boundaries might be Natural (Neumann/ABC?).
-    # This is safer for mixed polarization than enforcing PEC.
-    sim = build_simulation(meshfile; foundry_mode=false, dir_x=false, dir_y=false)
+    # This mesh is a half-cell in y, so keep dir_y=true (symmetry/PEC) for consistency.
+    sim = build_simulation(meshfile; foundry_mode=false, dir_x=false, dir_y=true)
 
     # Isotropic polarizability tensor (identity)
     αₚ = Matrix{ComplexF64}(I, 3, 3)
@@ -54,8 +51,8 @@ function build_complex_problem(; outdir::String=OUTDIR)
 
     # COMPLEX CONFIGURATION
 
-    # Pump: 532nm, Polarization X
-    pump_config = FieldConfig(532.0; θ=0.0, pol=:x)
+    # Pump: 532nm, Polarization Y (consistent with half-cell symmetry in y)
+    pump_config = FieldConfig(532.0; θ=0.0, pol=:y)
 
     # Emission Outputs:
     # 1. 540nm, Pol X, Weight 1.0
@@ -65,9 +62,9 @@ function build_complex_problem(; outdir::String=OUTDIR)
 
     outputs = [
         FieldConfig(540.0; θ=0.0, pol=:y, weight=1.0),
-        # FieldConfig(550.0; θ=0.0, pol=:y, weight=0.5),
-        # FieldConfig(560.0; θ=0.0, pol=:x, weight=2.0),
-        # FieldConfig(570.0; θ=0.0, pol=:y, weight=0.1)
+        FieldConfig(550.0; θ=0.0, pol=:y, weight=0.5),
+        FieldConfig(560.0; θ=0.0, pol=:x, weight=2.0),
+        FieldConfig(570.0; θ=0.0, pol=:y, weight=0.1)
     ]
 
     inputs = [pump_config]
@@ -128,8 +125,8 @@ end
 println("\n=== New-code Debug (Complex Multi-Output): 4 Emissions, Mixed Pol/Weights ===")
 println("Output directory: $(OUTDIR)")
 println("Configuration:")
-println("  Pump: 532nm (Pol X)")
-println("  Emit 1: 540nm (Pol X, w=1.0)")
+println("  Pump: 532nm (Pol Y)")
+println("  Emit 1: 540nm (Pol Y, w=1.0)")
 println("  Emit 2: 550nm (Pol Y, w=0.5)")
 println("  Emit 3: 560nm (Pol X, w=2.0)")
 println("  Emit 4: 570nm (Pol Y, w=0.1)")

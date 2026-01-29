@@ -21,6 +21,7 @@ include(e3.includescript("Setup"))
 using .Setup
 using LinearAlgebra
 using PyCall
+using Random
 
 mkpath(OUTDIR)
 
@@ -78,7 +79,7 @@ function build_old_objective(; outdir::String=OUTDIR)
         R_er=0.0,
         R_nl=0.0,
         R_s=2.0,
-        β=Inf,
+        β=8.0,
         η=0.5,
         ηe=0.75,
         ηd=0.25,
@@ -158,6 +159,7 @@ println("\n=== Old-code Debug (sandbox config): isotropic, 3D DOF, volume object
 println("Output directory: $(OUTDIR)")
 
 obj = build_old_objective()
+Random.seed!(2)
 p0 = 0.4 .+ 0.2 .* rand(Float64, obj.sim_y.np)
 rel_err = test_gradient(obj, p0)
 println("PASS = $(rel_err < 1e-4)  (rel_err = $rel_err)")

@@ -57,7 +57,8 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     # ═══ Step 2: Interpolate onto FEM mesh ═══
     nx, ny = length(sim.grid.x), length(sim.grid.y)
     sim.grid.params[:, :] = reshape(pf_vec, (nx, ny))
-    pf = interpolate(r -> pf_grid(r, sim.grid), sim.Pf)
+    pf_vals = [pf_grid(node, sim.grid) for node in sim.grid.nodes]
+    pf = FEFunction(sim.Pf, pf_vals)
 
     # ═══ Step 3: SSP projection on mesh ═══
     pt = project_ssp(pf, control)
@@ -75,17 +76,23 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     adjoints = solve_adjoint!(pde, sources, sim, pool)
 
     # ═══ Step 8: PDE sensitivity (∂A/∂pf from adjoint) ═══
-    ∂g_∂pf_pde = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim.P)
+    ∂g_∂pf_pde = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim.Pf)
+    if any(isnan, ∂g_∂pf_pde)
+        println("⚠️ ∂g_∂pf_pde has NaNs!")
+    end
 
     # ═══ Step 9: Explicit sensitivity (∂g/∂pf direct) ═══
-    ∂g_∂pf_explicit = explicit_sensitivity(objective, pde, fields, pf, pt, sim, control)
+    ∂g_∂pf_explicit = explicit_sensitivity(objective, pde, fields, pf, pt, sim, control; space=sim.Pf)
+    if any(isnan, ∂g_∂pf_explicit)
+        println("⚠️ ∂g_∂pf_explicit has NaNs!")
+    end
 
     # ═══ Step 10: Total sensitivity ═══
     ∂g_∂pf_vec = ∂g_∂pf_pde .+ ∂g_∂pf_explicit
 
-    # ═══ Step 11: Grid Jacobian — mesh quadrature → grid params ═══
-    getjacobian!(sim.grid)
-    ∂g_∂pf_grid = sim.grid.jacobian * ∂g_∂pf_vec
+    # ═══ Step 11: Grid adjoint — mesh nodes → grid params ═══
+    ∂g_∂pf_grid = similar(p)
+    apply_grid_adjoint!(∂g_∂pf_grid, sim.grid, ∂g_∂pf_vec)
 
     # ═══ Step 12: Chain through filter ═══
     ∂g_∂p = filter_grid_adjoint(∂g_∂pf_grid, sim, control)

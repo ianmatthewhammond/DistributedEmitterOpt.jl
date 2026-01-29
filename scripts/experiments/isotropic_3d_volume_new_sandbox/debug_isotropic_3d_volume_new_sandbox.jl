@@ -19,6 +19,7 @@ using PyCall
 const OUTDIR = dirname(@__FILE__)
 const PERTURBATION = 1e-8
 const TOL_RELATIVE = 1e-4
+const NF_SANDBOX = sqrt(1.77)
 
 """Build a sandbox-matched problem using the new architecture."""
 function build_debug_problem(; outdir::String=OUTDIR)
@@ -26,7 +27,7 @@ function build_debug_problem(; outdir::String=OUTDIR)
 
     # Geometry (sandbox config; match old SetupGeometry defaults)
     geo = SymmetricGeometry(532.0; L=150.0, W=150.0, hd=150.0, hsub=50.0)
-    hr = 532.0 / 1.33 / 2
+    hr = 532.0 / NF_SANDBOX / 2
     geo.ht = hr
     geo.hs = hr + hr
     geo.hair = hr + hr + hr
@@ -35,8 +36,7 @@ function build_debug_problem(; outdir::String=OUTDIR)
     geo.l3 = 30.0 
 
     meshfile = joinpath(outdir, "mesh.msh")
-    meshfile = "/Users/ianhammond/GitHub/DistributedEmitterOpt.jl/scripts/experiments/isotropic_3d_volume_old_sandbox/mesh.msh"
-    # genperiodic(geo, meshfile; per_x=false, per_y=false)
+    genperiodic(geo, meshfile; per_x=false, per_y=false)
 
     # 3D DOF mode, normal incidence (default source_y=true)
     sim = build_simulation(meshfile; foundry_mode=false, dir_x=false, dir_y=true)
@@ -51,7 +51,7 @@ function build_debug_problem(; outdir::String=OUTDIR)
         E_threshold=10.0
     )
 
-    env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
+    env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=NF_SANDBOX)
     inputs = [FieldConfig(532.0; θ=0.0, pol=:y)]
     outputs = FieldConfig[]  # Elastic scattering: outputs reuse inputs
     pde = MaxwellProblem(env=env, inputs=inputs, outputs=outputs)
@@ -61,7 +61,7 @@ function build_debug_problem(; outdir::String=OUTDIR)
         R_filter=(20.0, 20.0, 20.0),
         use_dct=false,         # Helmholtz filter for 3D DOF mode
         use_projection=true,
-        β=Inf,
+        β=8.0,
         η=0.5,
         use_ssp=true,
         R_ssp=2.0,
@@ -78,7 +78,6 @@ function build_debug_problem(; outdir::String=OUTDIR)
     )
 
     Random.seed!(2)
-    init_random!(prob)
 
     return prob
 end

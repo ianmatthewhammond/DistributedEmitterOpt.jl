@@ -47,6 +47,28 @@ Type-I Discrete Cosine Transform.
 DCT_I(x) = FFTW.r2r(x, FFTW.REDFT00)
 
 """
+    DCT_I_adj(x) -> Matrix
+
+Adjoint of DCT-I under the standard Euclidean inner product.
+This matches FFTW's unnormalized REDFT00 conventions.
+"""
+function DCT_I_adj(x::Matrix{Float64})
+    y = copy(x)
+    # Apply S^{-1}: scale endpoints by 2 (corners get 4)
+    y[1, :] .*= 2.0
+    y[end, :] .*= 2.0
+    y[:, 1] .*= 2.0
+    y[:, end] .*= 2.0
+    y = DCT_I(y)
+    # Apply S: scale endpoints by 0.5 (corners get 0.25)
+    y[1, :] .*= 0.5
+    y[end, :] .*= 0.5
+    y[:, 1] .*= 0.5
+    y[:, end] .*= 0.5
+    return y
+end
+
+"""
     iDCT_I(x) -> Matrix
 
 Inverse Type-I DCT (self-adjoint up to normalization).
@@ -72,6 +94,20 @@ function convolvedcti(x::Matrix{Float64}; h::Matrix{Float64})
     # Inverse transform
     y = iDCT_I(Y)
 
+    return y
+end
+
+"""
+    convolvedcti_adjoint(x; h) -> Matrix
+
+Adjoint of DCT-I convolution with kernel h.
+"""
+function convolvedcti_adjoint(x::Matrix{Float64}; h::Matrix{Float64})
+    H = DCT_I(h)
+    X = DCT_I_adj(x)
+    Y = H .* X
+    N = (2 * (size(x, 1) - 1)) * (2 * (size(x, 2) - 1))
+    y = DCT_I_adj(Y) / N
     return y
 end
 
@@ -162,6 +198,17 @@ end
 Adjoint of filter operation (same as forward for symmetric kernel).
 """
 function filter_grid_adjoint(∂g_∂pf::Vector{Float64}, sim, control)
-    # For symmetric kernels, adjoint = forward
-    return filter_grid(∂g_∂pf, sim, control)
+    if !control.use_filter
+        return copy(∂g_∂pf)
+    end
+
+    nx, ny = length(sim.grid.x), length(sim.grid.y)
+    Lx = sim.grid.x[end] - sim.grid.x[1]
+    Ly = sim.grid.y[end] - sim.grid.y[1]
+    R = control.R_filter[1]
+    h = conic_filter(R, Lx, Ly, nx, ny)
+
+    x = reshape(∂g_∂pf, (nx, ny))
+    y = control.use_dct ? convolvedcti_adjoint(x; h) : convolvefft(x; h)
+    return vec(y)
 end

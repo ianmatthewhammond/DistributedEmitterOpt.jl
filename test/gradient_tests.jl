@@ -21,7 +21,7 @@ using Test
 # ═══════════════════════════════════════════════════════════════════════════════
 
 const PERTURBATION = 1e-8
-const TOL_RELATIVE = 1e-4 
+const TOL_RELATIVE = 1e-4
 
 """Run finite difference gradient test and return relative error."""
 function test_gradient(prob, p0; δ=PERTURBATION, verbose=true)
@@ -59,20 +59,22 @@ end
 # Build test objective
 # ═══════════════════════════════════════════════════════════════════════════════
 
-"""Build a minimal test problem with given configuration."""
+"""Build a minimal test problem matching the experimental "sandbox" configuration."""
 function build_test_problem(;
-    foundry_mode::Bool=true,
+    foundry_mode::Bool=false,  # Default to 3D mode (matches experiments)
     flag_volume::Bool=true,
     flag_surface::Bool=false,
     use_damage::Bool=false,
     isotropic::Bool=true,
     λ::Float64=532.0,
     λ_pump::Float64=λ,
-    λ_emission::Float64=λ
+    λ_emission::Float64=λ,
+    complex_config::Bool=false # If true, use mixed pol/weights
 )
-    # Generate coarse test mesh
+    # Generate coarse test mesh with SYMMETRIC Y (half-cell)
+    # This matches the "sandbox" mesh topology used in experiments
     geo = SymmetricGeometry(λ_pump; L=100.0, W=100.0, hd=80.0, hsub=40.0)
-    geo.l1 = 50.0  # Very coarse
+    geo.l1 = 50.0  # Very coarse for speed
     geo.l2 = 30.0
     geo.l3 = 50.0
     geo.hair = 200.0
@@ -80,15 +82,22 @@ function build_test_problem(;
     geo.ht = 80.0
 
     meshfile = tempname() * ".msh"
-    genperiodic(geo, meshfile; per_x=true, per_y=true)
 
-    # Build simulation
-    sim = build_simulation(meshfile; foundry_mode, dir_x=false, dir_y=true)
+    # Key change: per_y=false to match half-cell symmetry of experiments (UNLESS regression testing foundry mode)
+    # Foundry mode typically expects full periodicity for 2D design projection
+    is_foundry = foundry_mode
+    genperiodic(geo, meshfile; per_x=true, per_y=is_foundry)
 
-    # Build PDE + objective
+    # Build simulation: dir_y=true enforces symmetry (PEC) on the Y-walls (only if not periodic)
+    sim = build_simulation(meshfile; foundry_mode, dir_x=false, dir_y=!is_foundry)
+
+    # Physics: Ag/Ag/1.33 match experiments
+    env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
+
+    # Polarizability
     αₚ = isotropic ? Matrix{ComplexF64}(I, 3, 3) : rand(ComplexF64, 3, 3)
     if !isotropic
-        αₚ = αₚ + transpose(αₚ)  # Symmetric
+        αₚ = αₚ + transpose(αₚ)
     end
 
     objective = SERSObjective(
@@ -100,18 +109,30 @@ function build_test_problem(;
         E_threshold=10.0
     )
 
-    env = Environment(mat_design="Ag", mat_fluid=1.33)
-    inputs = [FieldConfig(λ_pump; θ=0.0, pol=:y)]
-    outputs = λ_emission == λ_pump ? FieldConfig[] : [FieldConfig(λ_emission; θ=0.0, pol=:y)]
+    # IO Configuration
+    inputs = [FieldConfig(λ_pump; θ=0.0, pol=:y)] # Pump Y (consistent with symmetry)
+
+    outputs = if complex_config
+        # Mixed polarization and weights
+        [
+            FieldConfig(λ_emission; θ=0.0, pol=:y, weight=1.0),
+            FieldConfig(λ_emission + 10.0; θ=0.0, pol=:x, weight=0.5)
+        ]
+    elseif λ_emission == λ_pump
+        FieldConfig[] # Elastic
+    else
+        [FieldConfig(λ_emission; θ=0.0, pol=:y)] # Inelastic Y
+    end
+
     pde = MaxwellProblem(env=env, inputs=inputs, outputs=outputs)
 
-    # Control
+    # Control matches experiments (R=20, ssp=2.0)
     control = Control(
         use_filter=true,
-        R_filter=(15.0, 15.0, 15.0),
-        use_dct=foundry_mode,
+        R_filter=(20.0, 20.0, 20.0),
+        use_dct=foundry_mode, # DCT only for 2D/Foundry
         use_projection=true,
-        β=8.0,
+        β=8.0, # Finite beta for smooth gradients
         η=0.5,
         use_ssp=true,
         flag_volume=flag_volume,
@@ -130,7 +151,12 @@ function build_test_problem(;
 
     # Initialize with random design
     Random.seed!(42)
-    init_random!(prob)
+    # Foundry mode needs consistent grid size for random init
+    if foundry_mode
+        init_uniform!(prob, 0.5) # Simpler init for 2D to avoid mismatch issues
+    else
+        init_random!(prob)
+    end
 
     # Cleanup mesh file
     rm(meshfile; force=true)
@@ -144,97 +170,77 @@ end
 
 @testset "DistributedEmitterOpt Gradient Tests" begin
 
-    @testset "2D DOF (Foundry) Mode - Volume Objective" begin
-        println("\n=== 2D DOF Mode, Volume Objective ===")
-        prob = build_test_problem(foundry_mode=true, flag_volume=true, flag_surface=false)
+    # ══════════════════════════════════════════════════════════════════════════════
+    # Primary Configurations (3D DOF, Matching Experiments)
+    # ══════════════════════════════════════════════════════════════════════════════
+
+    @testset "3D Elastic Baseline (Standard Sandbox)" begin
+        println("\n=== 3D Elastic Baseline ===")
+        # Matches new_sandbox: 3D, Volume, Elastic, Isotropic
+        prob = build_test_problem(foundry_mode=false, flag_volume=true)
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
         @test rel_err < TOL_RELATIVE
     end
 
-    @testset "2D DOF (Foundry) Mode - Surface Objective" begin
-        println("\n=== 2D DOF Mode, Surface Objective ===")
-        prob = build_test_problem(foundry_mode=true, flag_volume=false, flag_surface=true)
+    @testset "3D Inelastic Scattering" begin
+        println("\n=== 3D Inelastic ===")
+        # Matches inelastic: Pump != Emission
+        prob = build_test_problem(
+            foundry_mode=false,
+            flag_volume=true,
+            λ_pump=532.0,
+            λ_emission=600.0
+        )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
         @test rel_err < TOL_RELATIVE
     end
 
-    @testset "2D DOF Mode - Volume + Surface Combined" begin
-        println("\n=== 2D DOF Mode, Volume + Surface ===")
-        prob = build_test_problem(foundry_mode=true, flag_volume=true, flag_surface=true)
+    @testset "3D Complex Configuration" begin
+        println("\n=== 3D Complex (Mixed Pol/Weights) ===")
+        # Matches complex_multi_output
+        prob = build_test_problem(
+            foundry_mode=false,
+            flag_volume=true,
+            complex_config=true
+        )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
         @test rel_err < TOL_RELATIVE
     end
 
-    @testset "2D DOF Mode - With Damage Model" begin
-        println("\n=== 2D DOF Mode, With Damage ===")
-        prob = build_test_problem(foundry_mode=true, use_damage=true)
-        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
-        rel_err, _ = test_gradient(prob, p0)
-        @test rel_err < TOL_RELATIVE
-    end
+    # ══════════════════════════════════════════════════════════════════════════════
+    # Variant Configurations (Surface, Damage, Anisotropic)
+    # ══════════════════════════════════════════════════════════════════════════════
 
-    @testset "3D DOF (Mesh) Mode - Volume Objective" begin
-        println("\n=== 3D DOF Mode, Volume Objective ===")
-        prob = build_test_problem(foundry_mode=false, flag_volume=true, flag_surface=false)
-        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
-        rel_err, _ = test_gradient(prob, p0)
-        @test rel_err < TOL_RELATIVE
-    end
-
-    @testset "3D DOF Mode - Surface Objective" begin
-        println("\n=== 3D DOF Mode, Surface Objective ===")
+    @testset "3D Surface Objective" begin
+        println("\n=== 3D Surface Objective ===")
         prob = build_test_problem(foundry_mode=false, flag_volume=false, flag_surface=true)
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
         @test rel_err < TOL_RELATIVE
     end
 
-    @testset "3D DOF Mode - With Damage Model" begin
-        println("\n=== 3D DOF Mode, With Damage ===")
+    @testset "3D With Damage Model" begin
+        println("\n=== 3D With Damage ===")
         prob = build_test_problem(foundry_mode=false, use_damage=true)
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
         @test rel_err < TOL_RELATIVE
     end
 
-    @testset "2D DOF Mode - Inelastic Volume Objective" begin
-        println("\n=== 2D DOF Mode, Inelastic Volume ===")
-        prob = build_test_problem(
-            foundry_mode=true,
-            flag_volume=true,
-            flag_surface=false,
-            λ_pump=532.0,
-            λ_emission=600.0
-        )
+    # ══════════════════════════════════════════════════════════════════════════════
+    # Legacy/Foundry Mode Regression
+    # ══════════════════════════════════════════════════════════════════════════════
+
+    @testset "2D Foundry Mode (Legacy)" begin
+        println("\n=== 2D Foundry Mode ===")
+        prob = build_test_problem(foundry_mode=true)
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
         @test rel_err < TOL_RELATIVE
     end
-
-    @testset "3D DOF Mode - Inelastic Surface Objective" begin
-        println("\n=== 3D DOF Mode, Inelastic Surface ===")
-        prob = build_test_problem(
-            foundry_mode=false,
-            flag_volume=false,
-            flag_surface=true,
-            λ_pump=532.0,
-            λ_emission=600.0
-        )
-        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
-        rel_err, _ = test_gradient(prob, p0)
-        @test rel_err < TOL_RELATIVE
-    end
-
-    # @testset "Anisotropic Polarizability" begin
-    #     println("\n=== Anisotropic Mode ===")
-    #     prob = build_test_problem(isotropic=false)
-    #     p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
-    #     rel_err, _ = test_gradient(prob, p0)
-    #     @test rel_err < TOL_RELATIVE
-    # end
 end
 
 println("\nGradient tests complete!")

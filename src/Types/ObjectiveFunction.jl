@@ -24,5 +24,5 @@ function explicit_sensitivity end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """Default: no explicit sensitivity term."""
-explicit_sensitivity(::ObjectiveFunction, pde, fields, pf, pt, sim, control) =
-    zeros(Float64, num_free_dofs(sim.Pf))
+explicit_sensitivity(::ObjectiveFunction, pde, fields, pf, pt, sim, control; space=sim.Pf) =
+    zeros(Float64, num_free_dofs(space))
