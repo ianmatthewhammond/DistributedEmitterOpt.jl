@@ -122,7 +122,7 @@ function build_foundry_experiment()
     sim = build_simulation(meshfile;
         foundry_mode=true,
         dir_x=false,
-        dir_y=false
+        dir_y=true
     )
 
     # 3. Physics / Environment

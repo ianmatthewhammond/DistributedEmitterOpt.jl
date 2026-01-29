@@ -64,15 +64,15 @@ end
 Heaviside-ish projection: smooth step from 0 to 1 centered at η.
 As β → ∞, approaches true Heaviside function.
 """
-function tanh_projection(x::Real, η::Float64, β::Float64)
-    if β == Inf
+function tanh_projection(x::Real, η::Real, β::Real)
+    if isinf(β)
         return x > η ? 1.0 : 0.0
     end
     return (tanh(β * η) + tanh(β * (x - η))) / (tanh(β * η) + tanh(β * (1.0 - η)))
 end
 
 """Vectorized tanh projection for arrays."""
-tanh_projection(x::AbstractArray, η::Float64, β::Float64) = tanh_projection.(x, η, β)
+tanh_projection(x::AbstractArray, η::Real, β::Real) = tanh_projection.(x, η, β)
 
 """Convenience with Control struct."""
 tanh_projection(x, control::Control) = tanh_projection(x, control.η, control.β)
@@ -94,8 +94,8 @@ end
 
 Derivative of tanh projection w.r.t. filtered density.
 """
-function ∂projection_∂pf(pf::Real, β::Float64, η::Float64)
-    if β == Inf
+function ∂projection_∂pf(pf::Real, β::Real, η::Real)
+    if isinf(β)
         return 0.0
     end
     return β * (1.0 - tanh(β * (pf - η))^2) / (tanh(β * η) + tanh(β * (1.0 - η)))
