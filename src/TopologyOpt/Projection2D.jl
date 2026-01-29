@@ -14,22 +14,18 @@ Includes smoothed projection for linewidth constraints.
 """
     compute_gradient(x::Matrix) -> (∂x_∂i, ∂x_∂j)
 
-Finite difference gradient of 2D array.
+Finite difference gradient of 2D array (non-mutating, Zygote-safe).
 """
 function compute_gradient(x::AbstractMatrix{Float64})
-    ni, nj = size(x)
+    dx_first = reshape(x[2, :] .- x[1, :], 1, :)
+    dx_mid = (x[3:end, :] .- x[1:end-2, :]) ./ 2.0
+    dx_last = reshape(x[end, :] .- x[end-1, :], 1, :)
+    ∂x_∂i = vcat(dx_first, dx_mid, dx_last)
 
-    # ∂/∂i (central differences, forward/backward at edges)
-    ∂x_∂i = similar(x)
-    ∂x_∂i[2:end-1, :] = (x[3:end, :] .- x[1:end-2, :]) ./ 2.0
-    ∂x_∂i[1, :] = x[2, :] .- x[1, :]
-    ∂x_∂i[end, :] = x[end, :] .- x[end-1, :]
-
-    # ∂/∂j
-    ∂x_∂j = similar(x)
-    ∂x_∂j[:, 2:end-1] = (x[:, 3:end] .- x[:, 1:end-2]) ./ 2.0
-    ∂x_∂j[:, 1] = x[:, 2] .- x[:, 1]
-    ∂x_∂j[:, end] = x[:, end] .- x[:, end-1]
+    dy_first = reshape(x[:, 2] .- x[:, 1], :, 1)
+    dy_mid = (x[:, 3:end] .- x[:, 1:end-2]) ./ 2.0
+    dy_last = reshape(x[:, end] .- x[:, end-1], :, 1)
+    ∂x_∂j = hcat(dy_first, dy_mid, dy_last)
 
     return ∂x_∂i, ∂x_∂j
 end
@@ -47,31 +43,54 @@ end
 """
     smoothed_projection(pf, control, sim) -> Array
 
-Gradient-aware smoothed projection for linewidth constraints.
-This version works on arrays (2D DOF mode).
+Legacy smoothed projection for linewidth constraints (ported from old code).
 """
 function smoothed_projection(pf::AbstractMatrix{Float64}, η::Float64, β::Float64,
     gridx::Vector{Float64}, gridy::Vector{Float64})
     Lx = gridx[end] - gridx[1]
     Ly = gridy[end] - gridy[1]
-    nx, ny = length(gridx), length(gridy)
+    resolution_x = (length(gridx) - 1) / Lx
+    resolution_y = (length(gridy) - 1) / Ly
 
-    # Compute gradient magnitude
+    dx = 1 / resolution_x
+    dy = 1 / resolution_y
+    R_smoothing_x = 0.55 * dx
+    R_smoothing_y = 0.55 * dy
+    R_smoothing = max(R_smoothing_x, R_smoothing_y)
+
+    ρ_projected = tanh_projection(pf, η, β)
+
+    # Gradient of filtered field
     ∂pf_∂i, ∂pf_∂j = compute_gradient(pf)
+    grad_helper = (∂pf_∂i ./ dx) .^ 2 .+ (∂pf_∂j ./ dy) .^ 2
 
-    # Scale to physical units
-    dx = Lx / (nx - 1)
-    dy = Ly / (ny - 1)
-    ∇pf_mag = sqrt.((∂pf_∂i ./ dx) .^ 2 .+ (∂pf_∂j ./ dy) .^ 2)
+    nonzero_norm = abs.(grad_helper) .> 0
+    grad_norm = sqrt.(ifelse.(nonzero_norm, grad_helper, 1))
+    grad_norm_eff = ifelse.(nonzero_norm, grad_norm, 1)
 
-    # Standard projection
-    pt = tanh_projection(pf, η, β)
+    d = (η .- pf) ./ grad_norm_eff
+    needs_smoothing = nonzero_norm .& (abs.(d) .<= R_smoothing)
 
-    # Smooth based on gradient magnitude (high gradient = intermediate values)
-    # This creates the "smoothing" effect at interfaces
-    smooth_factor = @. 1.0 / (1.0 + ∇pf_mag)
+    d_R = d ./ R_smoothing
+    F = ifelse.(
+        needs_smoothing,
+        0.5 .- 15/16 .* d_R .+ 5/8 .* d_R .^ 3 .- 3 / 16 .* d_R .^ 5,
+        1,
+    )
+    F_minus = ifelse.(
+        needs_smoothing,
+        0.5 .+ 15/16 .* d_R .- 5/8 .* d_R .^ 3 .+ 3 / 16 .* d_R .^ 5,
+        1,
+    )
 
-    return pt .* smooth_factor .+ pf .* (1.0 .- smooth_factor)
+    ρ_minus = pf .- R_smoothing .* grad_norm_eff .* F
+    ρ_plus = pf .+ R_smoothing .* grad_norm_eff .* F_minus
+
+    ρ_plus_proj = tanh_projection(ρ_plus, η, β)
+    ρ_minus_proj = tanh_projection(ρ_minus, η, β)
+
+    ρ_smoothed = (1 .- F) .* ρ_minus_proj .+ F .* ρ_plus_proj
+    return ifelse.(needs_smoothing, ρ_smoothed, ρ_projected)
 end
 
 """Convenience wrapper with Control struct."""

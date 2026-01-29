@@ -97,11 +97,19 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     end
 
     # Constraints (if enabled)
-    if use_constraints && prob.foundry_mode
-        NLopt.inequality_constraint!(opt,
-            (p, g) -> glc_solid(p, g; sim=prob.sim, control=prob.control), 1e-8)
-        NLopt.inequality_constraint!(opt,
-            (p, g) -> glc_void(p, g; sim=prob.sim, control=prob.control), 1e-8)
+    if use_constraints
+        if prob.foundry_mode
+            NLopt.inequality_constraint!(opt,
+                (p, g) -> glc_solid(p, g; sim=prob.sim, control=prob.control), 1e-8)
+            NLopt.inequality_constraint!(opt,
+                (p, g) -> glc_void(p, g; sim=prob.sim, control=prob.control), 1e-8)
+        else
+            obj = (; sim=prob.sim, control=prob.control, cache_pump=prob.pool.filter_cache)
+            NLopt.inequality_constraint!(opt,
+                (p, g) -> glc_solid_fe(p, g, obj), 1e-8)
+            NLopt.inequality_constraint!(opt,
+                (p, g) -> glc_void_fe(p, g, obj), 1e-8)
+        end
     end
 
     # Optimize

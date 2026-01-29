@@ -5,6 +5,8 @@ FE-based linewidth constraints for 3D DOF mode.
 Uses manual adjoint through the Helmholtz filter.
 """
 
+import LinearAlgebra: dot
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constraint functions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -18,15 +20,13 @@ function control_solid_fe(pf, pt, sim, control)
     ηe = control.η_erosion
     c0 = 64 * control.R_filter[1]^2
 
-    # Gradient magnitude
     ∇pf = ∇(pf)
-    ∇mag = sqrt ∘ (x -> sum(x .^ 2)) ∘ ∇pf
+    exp_term = (x -> exp(-c0 * dot(x, x))) ∘ ∇pf
+    I_s = pt * exp_term
+    minfield = (x -> min(x, 0.0)^2) ∘ (pf - ηe)
 
-    # Indicator function
-    indicator = x -> 1.0 / (1.0 + exp(c0 * (pt(x) - ηe)))
-
-    # Integrate
-    M = sum(∫(indicator * ∇mag)sim.dΩ_design)
+    norm_fac = sum(∫(1.0)sim.dΩ_design)
+    M = sum(∫(I_s * minfield)sim.dΩ_design) / norm_fac
 
     return real(M)
 end
@@ -40,15 +40,13 @@ function control_void_fe(pf, pt, sim, control)
     ηd = control.η_dilation
     c0 = 64 * control.R_filter[1]^2
 
-    # Gradient magnitude
     ∇pf = ∇(pf)
-    ∇mag = sqrt ∘ (x -> sum(x .^ 2)) ∘ ∇pf
+    exp_term = (x -> exp(-c0 * dot(x, x))) ∘ ∇pf
+    I_v = (1 - pt) * exp_term
+    minfield = (x -> min(x, 0.0)^2) ∘ (ηd - pf)
 
-    # Indicator function (reversed)
-    indicator = x -> 1.0 / (1.0 + exp(c0 * (ηd - pt(x))))
-
-    # Integrate
-    M = sum(∫(indicator * ∇mag)sim.dΩ_design)
+    norm_fac = sum(∫(1.0)sim.dΩ_design)
+    M = sum(∫(I_v * minfield)sim.dΩ_design) / norm_fac
 
     return real(M)
 end
@@ -83,15 +81,22 @@ function glc_solid_fe(p_vec::Vector{Float64}, grad::Vector{Float64}, obj)
         ηe = control.η_erosion
         c0 = 64 * control.R_filter[1]^2
         ∇pf = ∇(pf)
+        exp_term = (x -> exp(-c0 * dot(x, x))) ∘ ∇pf
+        I_s = pt * exp_term
+        minfield = (x -> min(x, 0.0)^2) ∘ (pf - ηe)
+        dmin = (x -> 2 * min(x, 0.0)) ∘ (pf - ηe)
 
+        norm_fac = sum(∫(1.0)sim.dΩ_design)
         ∂M_∂pf = assemble_vector(sim.Pf) do v
-            # Gradient magnitude sensitivity
-            ∇mag = sqrt ∘ (x -> sum(x .^ 2)) ∘ ∇pf
-            indicator = x -> 1.0 / (1.0 + exp(c0 * (pt(x) - ηe)))
-
-            # Chain rule contributions
-            ∫(∇(v) ⋅ (∇pf / (∇mag + 1e-10)) * indicator)sim.dΩ_design
-        end
+            dpt = ((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)
+            ∫(
+                (
+                    pt * (-2 * c0 * exp_term) * (∇pf ⋅ ∇(v)) +
+                    exp_term * dpt
+                ) * minfield +
+                v * dmin * I_s
+            )sim.dΩ_design
+        end ./ norm_fac
 
         # Chain through filter adjoint
         ∂M_∂p = filter_helmholtz_adjoint!(∂M_∂pf, cache, sim, control)
@@ -127,13 +132,22 @@ function glc_void_fe(p_vec::Vector{Float64}, grad::Vector{Float64}, obj)
         ηd = control.η_dilation
         c0 = 64 * control.R_filter[1]^2
         ∇pf = ∇(pf)
+        exp_term = (x -> exp(-c0 * dot(x, x))) ∘ ∇pf
+        I_v = (1 - pt) * exp_term
+        minfield = (x -> min(x, 0.0)^2) ∘ (ηd - pf)
+        dmin = (x -> -2 * min(x, 0.0)) ∘ (ηd - pf)
 
+        norm_fac = sum(∫(1.0)sim.dΩ_design)
         ∂M_∂pf = assemble_vector(sim.Pf) do v
-            ∇mag = sqrt ∘ (x -> sum(x .^ 2)) ∘ ∇pf
-            indicator = x -> 1.0 / (1.0 + exp(c0 * (ηd - pt(x))))
-
-            ∫(∇(v) ⋅ (∇pf / (∇mag + 1e-10)) * indicator)sim.dΩ_design
-        end
+            dpt = ((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)
+            ∫(
+                (
+                    (1 - pt) * (-2 * c0 * exp_term) * (∇pf ⋅ ∇(v)) -
+                    exp_term * dpt
+                ) * minfield +
+                v * dmin * I_v
+            )sim.dΩ_design
+        end ./ norm_fac
 
         ∂M_∂p = filter_helmholtz_adjoint!(∂M_∂pf, cache, sim, control)
 

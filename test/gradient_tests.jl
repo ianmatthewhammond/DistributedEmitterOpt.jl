@@ -71,15 +71,25 @@ function build_test_problem(;
     λ_emission::Float64=λ,
     complex_config::Bool=false # If true, use mixed pol/weights
 )
-    # Generate coarse test mesh with SYMMETRIC Y (half-cell)
-    # This matches the "sandbox" mesh topology used in experiments
-    geo = SymmetricGeometry(λ_pump; L=100.0, W=100.0, hd=80.0, hsub=40.0)
-    geo.l1 = 50.0  # Very coarse for speed
-    geo.l2 = 30.0
-    geo.l3 = 50.0
-    geo.hair = 200.0
-    geo.hs = 120.0
-    geo.ht = 80.0
+    # Geometry: match debug_foundry_2d for foundry mode, sandbox mesh otherwise
+    geo = if foundry_mode
+        g = SymmetricGeometry()
+        g.L = 200.0
+        g.W = 200.0
+        g.l1 = 40.0
+        g.l2 = 20.0
+        g.l3 = 40.0
+        g
+    else
+        g = SymmetricGeometry(λ_pump; L=100.0, W=100.0, hd=80.0, hsub=40.0)
+        g.l1 = 50.0  # Very coarse for speed
+        g.l2 = 30.0
+        g.l3 = 50.0
+        g.hair = 200.0
+        g.hs = 120.0
+        g.ht = 80.0
+        g
+    end
 
     meshfile = tempname() * ".msh"
 
@@ -95,10 +105,16 @@ function build_test_problem(;
     env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
 
     # Polarizability
-    αₚ = isotropic ? Matrix{ComplexF64}(I, 3, 3) : rand(ComplexF64, 3, 3)
-    if !isotropic
-        αₚ = αₚ + transpose(αₚ)
+    function anisotropic_tensor()
+        α = ComplexF64[
+            1.10+0.00im   0.05+0.02im  0.01-0.03im
+            0.02-0.01im   0.95+0.00im  0.03+0.04im
+            0.01+0.00im   0.02-0.02im  1.05+0.00im
+        ]
+        return (α + transpose(α)) / 2
     end
+
+    αₚ = isotropic ? Matrix{ComplexF64}(I, 3, 3) : anisotropic_tensor()
 
     objective = SERSObjective(
         αₚ=αₚ,
@@ -230,6 +246,26 @@ end
         @test rel_err < TOL_RELATIVE
     end
 
+    @testset "3D Anisotropic (Elastic)" begin
+        println("\n=== 3D Anisotropic (Elastic) ===")
+        prob = build_test_problem(foundry_mode=false, isotropic=false)
+        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
+        rel_err, _ = test_gradient(prob, p0)
+        @test rel_err < TOL_RELATIVE
+    end
+
+    @testset "3D Anisotropic + Multi Output" begin
+        println("\n=== 3D Anisotropic + Multi Output ===")
+        prob = build_test_problem(
+            foundry_mode=false,
+            isotropic=false,
+            complex_config=true
+        )
+        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
+        rel_err, _ = test_gradient(prob, p0)
+        @test rel_err < TOL_RELATIVE
+    end
+
     # ══════════════════════════════════════════════════════════════════════════════
     # Legacy/Foundry Mode Regression
     # ══════════════════════════════════════════════════════════════════════════════
@@ -238,7 +274,39 @@ end
         println("\n=== 2D Foundry Mode ===")
         prob = build_test_problem(foundry_mode=true)
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
-        rel_err, _ = test_gradient(prob, p0)
+        rel_err, _ = test_gradient(prob, p0; δ=1e-8)
+        @test rel_err < TOL_RELATIVE
+    end
+
+    @testset "2D Foundry Inelastic" begin
+        println("\n=== 2D Foundry Inelastic ===")
+        prob = build_test_problem(
+            foundry_mode=true,
+            λ_pump=532.0,
+            λ_emission=600.0
+        )
+        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
+        rel_err, _ = test_gradient(prob, p0; δ=1e-8)
+        @test rel_err < TOL_RELATIVE
+    end
+
+    @testset "2D Foundry Anisotropic" begin
+        println("\n=== 2D Foundry Anisotropic ===")
+        prob = build_test_problem(foundry_mode=true, isotropic=false)
+        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
+        rel_err, _ = test_gradient(prob, p0; δ=1e-8)
+        @test rel_err < TOL_RELATIVE
+    end
+
+    @testset "2D Foundry Anisotropic + Multi Output" begin
+        println("\n=== 2D Foundry Anisotropic + Multi Output ===")
+        prob = build_test_problem(
+            foundry_mode=true,
+            isotropic=false,
+            complex_config=true
+        )
+        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
+        rel_err, _ = test_gradient(prob, p0; δ=1e-8)
         @test rel_err < TOL_RELATIVE
     end
 end
