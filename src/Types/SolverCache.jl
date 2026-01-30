@@ -172,3 +172,8 @@ function clear_eigen_factors!(pool::SolverCachePool)
     pool.eigen_cache.A_factor = nothing
     pool.eigen_shift = nothing
 end
+
+"""Empty the cache pool (remove all cached solvers)."""
+function Base.empty!(pool::SolverCachePool)
+    empty!(pool.caches)
+end
