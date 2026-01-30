@@ -17,5 +17,5 @@
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.jpeg filter=lfs diff=lfs merge=lfs -text
 
-# Exclude docs assets from LFS
-docs/src/assets/* -filter -diff -merge text
+# Exclude docs assets from LFS and keep binary
+docs/src/assets/* -filter -diff -merge -text
