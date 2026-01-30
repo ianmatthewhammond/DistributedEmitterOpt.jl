@@ -28,10 +28,16 @@ function optimize!(prob::OptimizationProblem;
     β_schedule::Vector{Float64}=[8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0],
     α_schedule::Union{Vector{Float64},Nothing}=nothing,
     use_constraints::Bool=false,
-    tol::Float64=1e-8)
+    tol::Float64=1e-8,
+    empty_history::Bool=true)
 
     p_opt = copy(prob.p)
     g_opt = 0.0
+
+    # Initialize history
+    if empty_history
+        empty!(prob.g_history)
+    end
 
     for (epoch, β) in enumerate(β_schedule)
         @info "Epoch $epoch: β = $β"
@@ -178,9 +184,17 @@ end
 # Logging
 # ---------------------------------------------------------------------------
 
+"""Initialize history tracking."""
+function init_history!(prob::OptimizationProblem)
+    prob.g_history = Float64[]
+end
+
 """Log iteration to console and optionally save checkpoint."""
 function log_iteration!(prob::OptimizationProblem, g, p)
     iter = prob.iteration
+
+    # Store history
+    push!(prob.g_history, g)
 
     if iter % 5 == 0
         @info "Iter $iter: g = $(round(g, sigdigits=4))"

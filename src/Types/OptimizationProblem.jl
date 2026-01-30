@@ -25,6 +25,7 @@ mutable struct OptimizationProblem{PDE<:MaxwellProblem,Obj<:ObjectiveFunction}
     p::Vector{Float64}       # current design
     g::Float64               # current objective value
     ∇g::Vector{Float64}      # current gradient
+    g_history::Vector{Float64} # history of objective values
 
     # Metadata
     root::String             # output directory
@@ -69,6 +70,7 @@ function OptimizationProblem(
     p = zeros(Float64, np)
     g = 0.0
     ∇g = zeros(Float64, np)
+    g_history = Float64[]
 
     OptimizationProblem(
         pde,
@@ -80,6 +82,7 @@ function OptimizationProblem(
         p,
         g,
         ∇g,
+        g_history,
         root,
         0
     )
@@ -100,6 +103,7 @@ function OptimizationProblem(
     p = zeros(Float64, np)
     g = 0.0
     ∇g = zeros(Float64, np)
+    g_history = Float64[]
 
     OptimizationProblem(
         pde,
@@ -111,6 +115,7 @@ function OptimizationProblem(
         p,
         g,
         ∇g,
+        g_history,
         root,
         0
     )

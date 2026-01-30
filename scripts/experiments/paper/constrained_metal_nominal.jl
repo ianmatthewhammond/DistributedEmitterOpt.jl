@@ -1,4 +1,7 @@
+using Pkg
+Pkg.activate(joinpath(@__DIR__, "../../.."))
 using DistributedEmitterOpt
+using DistributedEmitterOpt.Analysis
 using LinearAlgebra
 
 # Paper configuration: constrained metal, nominal (monopolarized, elastic)
@@ -14,7 +17,8 @@ mkpath(root)
 geo = SymmetricGeometry(
     184.28757605350117, 184.28757605350117, 599.8135303462574,
     399.8756868975049, 199.93784344875246, 100.0, 50.0, 0.0,
-    12.5, 2.9, 12.5, 0
+    # 12.5, 2.9, 12.5, 0
+    25.5, 25.5, 25.5, 0
 )
 
 # Mesh generation (periodic in x/y, as in the original setup)
@@ -83,5 +87,28 @@ g_opt, p_opt = optimize!(prob;
     β_schedule=β_schedule,
     use_constraints=true
 )
+g_history = prob.g_history
 
 println("Completed $name: g_opt = $g_opt, p_opt length = $(length(p_opt))")
+
+# ---------------------------------------------------------------------------
+# Post-Processing
+# ---------------------------------------------------------------------------
+
+println("\n--- Starting Post-Processing ---")
+
+# 1. Visualize results (VTK)
+Analysis.visualize_results(prob, p_opt; root=root)
+
+# 2. Plot iteration history
+Analysis.plot_iteration_history(g_history; root=root)
+
+# 3. Spectral sweep (Robustness to wavelength shift)
+# Center at 532 nm, +/- 50 nm range
+Analysis.spectral_sweep(prob, p_opt; center_λ=532.0, range_λ=50.0, root=root)
+
+# 4. Fabrication tolerance sweep (Robustness to filter radius / erosion)
+# nominal R=20 nm, sweep +/- 10 nm
+Analysis.fabrication_sweep(prob, p_opt; center_R=20.0, range_R=10.0, root=root)
+
+println("--- Post-Processing Done ---")

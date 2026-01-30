@@ -106,6 +106,9 @@ include("Optimization/GradientCoordinatorEigen.jl")
 include("Visualization/Visualization.jl")
 using .Visualization
 
+include("Analysis/Analysis.jl")
+using .Analysis
+
 
 # ---------------------------------------------------------------------------
 # Exports
@@ -169,5 +172,8 @@ export vperiodicdesign, visualize, visualizepost, visualize_new
 export plot_material, plot_field, plot_substrate, get_figure_data
 export combine_figures, add_text!, load_bid_parameters
 export plot_directionals, plot_geometrics, plot_geometrics_one_only, plot_tolerance
+
+# Analysis
+export Analysis
 
 end # module
