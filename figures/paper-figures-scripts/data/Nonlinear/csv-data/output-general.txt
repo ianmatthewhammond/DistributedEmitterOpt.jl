@@ -1,0 +1,461 @@
+Job number: 3615993
+Info    : Reading '/home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/paper-experiments-2025/11-2025-nonlinear/spheres-sweep/mesh.msh'...
+Info    : 99 entities
+Info    : 411181 nodes
+Info    : 2533350 elements
+Info    : Done reading '/home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/paper-experiments-2025/11-2025-nonlinear/spheres-sweep/mesh.msh'
+(λ, nf, hr) = (532.0, 1.3304134695650072, 199.93784344875246)
+Done Generating Mesh!
+geometry = Emitter3DTopOpt.SymmetricGeometry(184.28757605350117, 184.28757605350117, 599.8135303462574, 399.8756868975049, 199.93784344875246, 388.57515210700234, 50.0, 0.0, 12.5, 2.9, 12.5, 0)
+bad_vertices = Int64[]
+dirichlet_tags = ["FacesY"]
+flag_dct = true
+control.b1 = 6.0e-6
+phys_1 = Emitter3DTopOpt.PhysicalParameters(0.01181049869770599, 0.0, 1.3304134695650072 + 0.0im, 0.054007220216606505 - 3.42898916967509im, 0.054007220216606505 - 3.42898916967509im, 1.0, -469.19434122662983, -80.61918911962749, 0.0, ComplexF64[1.0 + 0.0im 0.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 1.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 0.0 + 0.0im 1.0 + 0.0im], false)
+phys_2 = Emitter3DTopOpt.PhysicalParameters(0.01181049869770599, 0.0, 1.3304134695650072 + 0.0im, 0.054007220216606505 - 3.42898916967509im, 0.054007220216606505 - 3.42898916967509im, 1.0, -469.19434122662983, -80.61918911962749, 0.0, ComplexF64[1.0 + 0.0im 0.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 1.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 0.0 + 0.0im 1.0 + 0.0im], false)
+control = Emitter3DTopOpt.Control(false, true, false, false, true, true, true, (20.0, 20.0, 20.0), (0.0, 0.0, 0.0), 0.0, 1.5, Inf, 0.5, 0.75, 0.25, 6.0e-6, 25600.0, 1.0, 1.0e8)
+bad_vertices = Int64[]
+dirichlet_tags = ["FacesX"]
+issymmetric = false
+"Setting up new solver" = "Setting up new solver"
+issymmetric = false
+"Setting up new solver" = "Setting up new solver"
+issymmetric = false
+issymmetric = false
+Eₜₕ: 0.0
+  X component: 1.2999904501262396
+  Y component: 0.20814212012610842
+  Total: 1.508132570252348
+issymmetric = false
+issymmetric = false
+Eₜₕ: 3.061224489795918
+  X component: 8.167434803587126
+  Y component: 2.3728824494323515
+  Total: 10.540317253019477
+issymmetric = false
+issymmetric = false
+Eₜₕ: 6.122448979591836
+  X component: 21.899111899063683
+  Y component: 8.295708029083974
+  Total: 30.194819928147655
+issymmetric = false
+issymmetric = false
+Eₜₕ: 9.183673469387756
+  X component: 50.9781902420704
+  Y component: 17.024590993717645
+  Total: 68.00278123578805
+issymmetric = false
+issymmetric = false
+Eₜₕ: 12.244897959183673
+  X component: 112.48005165507473
+  Y component: 25.271983797002402
+  Total: 137.75203545207714
+issymmetric = false
+issymmetric = false
+Eₜₕ: 15.306122448979592
+  X component: 188.0665762919753
+  Y component: 31.247975274108533
+  Total: 219.31455156608385
+issymmetric = false
+issymmetric = false
+Eₜₕ: 18.367346938775512
+  X component: 270.81484576418126
+  Y component: 41.832320594655265
+  Total: 312.6471663588365
+issymmetric = false
+issymmetric = false
+Eₜₕ: 21.428571428571427
+  X component: 331.5376893068961
+  Y component: 46.38387807927763
+  Total: 377.9215673861737
+issymmetric = false
+issymmetric = false
+Eₜₕ: 24.489795918367346
+  X component: 459.3716509702484
+  Y component: 47.65197916163562
+  Total: 507.02363013188403
+issymmetric = false
+issymmetric = false
+Eₜₕ: 27.551020408163264
+  X component: 557.0677538629865
+  Y component: 49.046075084746825
+  Total: 606.1138289477333
+issymmetric = false
+issymmetric = false
+Eₜₕ: 30.612244897959183
+  X component: 672.2897255006322
+  Y component: 52.902865382072335
+  Total: 725.1925908827046
+issymmetric = false
+issymmetric = false
+Eₜₕ: 33.673469387755105
+  X component: 882.4472263035088
+  Y component: 57.62549877739195
+  Total: 940.0727250809009
+issymmetric = false
+issymmetric = false
+Eₜₕ: 36.734693877551024
+  X component: 983.6983809822635
+  Y component: 60.25043640553918
+  Total: 1043.9488173878028
+issymmetric = false
+issymmetric = false
+Eₜₕ: 39.795918367346935
+  X component: 1273.8982294199766
+  Y component: 60.37447154067564
+  Total: 1334.2727009606522
+issymmetric = false
+issymmetric = false
+Eₜₕ: 42.857142857142854
+  X component: 1638.6651683133591
+  Y component: 60.49716035948516
+  Total: 1699.1623286728443
+issymmetric = false
+issymmetric = false
+Eₜₕ: 45.91836734693877
+  X component: 1921.9130667155341
+  Y component: 60.69614117595269
+  Total: 1982.6092078914867
+issymmetric = false
+issymmetric = false
+Eₜₕ: 48.97959183673469
+  X component: 2010.3361648826228
+  Y component: 60.69624826591413
+  Total: 2071.032413148537
+issymmetric = false
+issymmetric = false
+Eₜₕ: 52.04081632653061
+  X component: 2052.5707691425455
+  Y component: 60.69632432266947
+  Total: 2113.2670934652147
+issymmetric = false
+issymmetric = false
+Eₜₕ: 55.10204081632653
+  X component: 2258.5600084746966
+  Y component: 60.69681755976206
+  Total: 2319.2568260344588
+issymmetric = false
+issymmetric = false
+Eₜₕ: 58.16326530612245
+  X component: 2389.76052253958
+  Y component: 60.69692794168247
+  Total: 2450.4574504812626
+issymmetric = false
+issymmetric = false
+Eₜₕ: 61.224489795918366
+  X component: 2753.331796994319
+  Y component: 60.697450314384284
+  Total: 2814.0292473087034
+issymmetric = false
+issymmetric = false
+Eₜₕ: 64.28571428571429
+  X component: 2971.323854083988
+  Y component: 60.69765552129012
+  Total: 3032.021509605278
+issymmetric = false
+issymmetric = false
+Eₜₕ: 67.34693877551021
+  X component: 2971.323854083948
+  Y component: 60.697655521289825
+  Total: 3032.0215096052375
+issymmetric = false
+issymmetric = false
+Eₜₕ: 70.40816326530613
+  X component: 2971.3238540839698
+  Y component: 60.6976555212894
+  Total: 3032.02150960526
+issymmetric = false
+issymmetric = false
+Eₜₕ: 73.46938775510205
+  X component: 3119.5603408946704
+  Y component: 60.69789887231834
+  Total: 3180.2582397669885
+issymmetric = false
+issymmetric = false
+Eₜₕ: 76.53061224489795
+  X component: 3119.56034089469
+  Y component: 60.69789887231895
+  Total: 3180.258239767009
+issymmetric = false
+issymmetric = false
+Eₜₕ: 79.59183673469387
+  X component: 3119.560340894652
+  Y component: 60.697898872319016
+  Total: 3180.258239766971
+issymmetric = false
+issymmetric = false
+Eₜₕ: 82.65306122448979
+  X component: 3119.560340894652
+  Y component: 60.697898872318994
+  Total: 3180.258239766971
+issymmetric = false
+issymmetric = false
+Eₜₕ: 85.71428571428571
+  X component: 3747.9360468115196
+  Y component: 60.69953349236345
+  Total: 3808.6355803038828
+issymmetric = false
+issymmetric = false
+Eₜₕ: 88.77551020408163
+  X component: 3747.936046811538
+  Y component: 60.69953349236406
+  Total: 3808.635580303902
+issymmetric = false
+issymmetric = false
+Eₜₕ: 91.83673469387755
+  X component: 4062.724232765824
+  Y component: 60.70026634913327
+  Total: 4123.424499114957
+issymmetric = false
+issymmetric = false
+Eₜₕ: 94.89795918367346
+  X component: 4342.066137375467
+  Y component: 60.70091497496959
+  Total: 4402.767052350437
+issymmetric = false
+issymmetric = false
+Eₜₕ: 97.95918367346938
+  X component: 4698.743163701618
+  Y component: 60.701933512220016
+  Total: 4759.4450972138375
+issymmetric = false
+issymmetric = false
+Eₜₕ: 101.0204081632653
+  X component: 4698.743163701561
+  Y component: 60.70193351222067
+  Total: 4759.445097213781
+issymmetric = false
+issymmetric = false
+Eₜₕ: 104.08163265306122
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 107.14285714285714
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 110.20408163265306
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 113.26530612244898
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 116.3265306122449
+  X component: 5215.188603703542
+  Y component: 60.70286413831837
+  Total: 5275.8914678418605
+issymmetric = false
+issymmetric = false
+Eₜₕ: 119.38775510204081
+  X component: 5215.188603703466
+  Y component: 60.70286413831904
+  Total: 5275.891467841785
+issymmetric = false
+issymmetric = false
+Eₜₕ: 122.44897959183673
+  X component: 5215.188603703561
+  Y component: 60.702864138318986
+  Total: 5275.89146784188
+issymmetric = false
+issymmetric = false
+Eₜₕ: 125.51020408163265
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 128.57142857142858
+  X component: 5215.188603703561
+  Y component: 60.702864138318986
+  Total: 5275.89146784188
+issymmetric = false
+issymmetric = false
+Eₜₕ: 131.6326530612245
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 134.69387755102042
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 137.75510204081633
+  X component: 5215.188603703542
+  Y component: 60.70286413831837
+  Total: 5275.8914678418605
+issymmetric = false
+issymmetric = false
+Eₜₕ: 140.81632653061226
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 143.87755102040816
+  X component: 5215.188603703476
+  Y component: 60.70286413831902
+  Total: 5275.891467841794
+issymmetric = false
+issymmetric = false
+Eₜₕ: 146.9387755102041
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 150.0
+  X component: 5215.188603703466
+  Y component: 60.70286413831904
+  Total: 5275.891467841785
+issymmetric = false
+issymmetric = false
+Eₜₕ: 150.0
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 157.14285714285714
+  X component: 5215.188603703476
+  Y component: 60.70286413831902
+  Total: 5275.891467841794
+issymmetric = false
+issymmetric = false
+Eₜₕ: 164.28571428571428
+  X component: 5215.188603703481
+  Y component: 60.70286413831895
+  Total: 5275.8914678418
+issymmetric = false
+issymmetric = false
+Eₜₕ: 171.42857142857142
+  X component: 5215.188603703561
+  Y component: 60.702864138318986
+  Total: 5275.89146784188
+issymmetric = false
+issymmetric = false
+Eₜₕ: 178.57142857142858
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 185.71428571428572
+  X component: 5215.188603703561
+  Y component: 60.702864138318986
+  Total: 5275.89146784188
+issymmetric = false
+issymmetric = false
+Eₜₕ: 192.85714285714286
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 200.0
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 207.14285714285714
+  X component: 5215.18860370352
+  Y component: 60.70286413831926
+  Total: 5275.89146784184
+issymmetric = false
+issymmetric = false
+Eₜₕ: 214.28571428571428
+  X component: 5215.188603703466
+  Y component: 60.70286413831904
+  Total: 5275.891467841785
+issymmetric = false
+issymmetric = false
+Eₜₕ: 221.42857142857142
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 228.57142857142858
+  X component: 5215.188603703542
+  Y component: 60.70286413831837
+  Total: 5275.8914678418605
+issymmetric = false
+issymmetric = false
+Eₜₕ: 235.71428571428572
+  X component: 5215.188603703542
+  Y component: 60.70286413831837
+  Total: 5275.8914678418605
+issymmetric = false
+issymmetric = false
+Eₜₕ: 242.85714285714286
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+issymmetric = false
+issymmetric = false
+Eₜₕ: 250.0
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 257.14285714285717
+  X component: 5215.188603703542
+  Y component: 60.70286413831837
+  Total: 5275.8914678418605
+issymmetric = false
+issymmetric = false
+Eₜₕ: 264.2857142857143
+  X component: 5215.188603703542
+  Y component: 60.70286413831837
+  Total: 5275.8914678418605
+issymmetric = false
+issymmetric = false
+Eₜₕ: 271.42857142857144
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 278.57142857142856
+  X component: 5215.188603703476
+  Y component: 60.70286413831902
+  Total: 5275.891467841794
+issymmetric = false
+issymmetric = false
+Eₜₕ: 285.7142857142857
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 292.85714285714283
+  X component: 5215.188603703523
+  Y component: 60.702864138319
+  Total: 5275.891467841842
+issymmetric = false
+issymmetric = false
+Eₜₕ: 300.0
+  X component: 5215.188603703529
+  Y component: 60.702864138318624
+  Total: 5275.891467841848
+issymmetric = false
+issymmetric = false
+Eₜₕ: 307.14285714285717
+  X component: 5215.188603703582
+  Y component: 60.70286413831934
+  Total: 5275.891467841901
+slurmstepd-d-7-11-1: error: *** JOB 3615993 ON d-7-11-1 CANCELLED AT 2025-11-24T11:48:56 DUE TO TIME LIMIT ***

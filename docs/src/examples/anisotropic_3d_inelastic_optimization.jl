@@ -9,7 +9,7 @@
 using DistributedEmitterOpt
 using LinearAlgebra
 
-# ## 1. Mesh + simulation (3D DOF)
+# ## 1. Mesh generation
 λ_pump = 532.0
 λ_emission = 600.0
 
@@ -23,12 +23,9 @@ geo.ht = 80.0
 
 outdir = mktempdir()
 meshfile = joinpath(outdir, "mesh.msh")
-# For 3D FE mode we use PEC symmetry in Y (per_y=false)
-genmesh(geo, meshfile; per_x=true, per_y=false)
+genmesh(geo, meshfile; per_x=false, per_y=false)
 
-sim = build_simulation(meshfile; foundry_mode=false, dir_x=false, dir_y=true)
-
-# ## 2. Physics (inelastic with two outputs)
+# ## 2. Physics (inelastic with two outputs, mixed polarization)
 env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
 inputs = [FieldConfig(λ_pump; θ=0.0, pol=:y)]
 outputs = [
@@ -41,9 +38,9 @@ pde = MaxwellProblem(env=env, inputs=inputs, outputs=outputs)
 # ## 3. Objective (anisotropic)
 function anisotropic_tensor()
     α = ComplexF64[
-        1.10+0.00im  0.05+0.02im  0.01-0.03im
-        0.02-0.01im  0.95+0.00im  0.03+0.04im
-        0.01+0.00im  0.02-0.02im  1.05+0.00im
+        1.10+0.00im 0.05+0.02im 0.01-0.03im
+        0.02-0.01im 0.95+0.00im 0.03+0.04im
+        0.01+0.00im 0.02-0.02im 1.05+0.00im
     ]
     return (α + transpose(α)) / 2
 end
@@ -67,7 +64,11 @@ control = Control(
 )
 
 # ## 5. Problem assembly
-prob = OptimizationProblem(pde, objective, sim, UmfpackSolver();
+# The meshfile-based constructor automatically creates a SimulationBundle
+# that handles both x and y polarization for mixed-polarization problems.
+prob = OptimizationProblem(pde, objective, meshfile, UmfpackSolver();
+    per_x=false,
+    per_y=false,
     foundry_mode=false,
     control=control,
     root=outdir
@@ -83,3 +84,4 @@ max_iter = 5
 (g_opt, p_opt) = optimize!(prob; max_iter=max_iter, β_schedule=β_schedule)
 
 println("Final objective = ", g_opt)
+

@@ -1,0 +1,328 @@
+Job number: 547456
+yaml_file = "resume.yaml"
+post_process = true
+α: 0.0
+full_y: false
+mat_s: SiO2
+full_x: false
+hd: 200.0
+qorder: 6
+flag_foundry: true
+c0: 25600
+l1: 10.0
+ηd: 0.25
+γ: 1.0
+ηe: 0.75
+bidirectional: false
+mat_m: Si3N4
+hsub: 200.0
+R_nl: 0.0
+flag_t: true
+init: ["results.jld2"]
+λ2: 532.0
+make_conformal: false
+λ1: 532.0
+flag_f: true
+firststep: true
+α_list: [0.1, 0.01, 0.001, 0.001]
+R_f: 20.0
+flag_c: true
+root: /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/masters-thesis-2024/postprocessing-no-subpixel/constrained-dielectric/
+R_er: 0.0
+flag_adam: false
+flagV: true
+subpixel: true
+flagS: false
+genmesh: true
+flag_nd: false
+θ1: 0.0
+Eₜₕ: 10000.0
+b1: 1.0e-8
+l3: 10.0
+norder: 0
+θ2: 0.0
+β: Inf
+nonlocal: false
+meshfile: mesh.msh
+l2: 5.0
+flag_r: false
+mesh_type: Box
+η: 0.5
+β_list: [8.0, 16.0, 32.0, Inf]
+max_iter: 200
+sweep_e: true
+full_cell: false
+sweep_p: false
+Info    : Reading '/home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/masters-thesis-2024/postprocessing-no-subpixel/constrained-dielectric/mesh.msh'...
+Info    : 99 entities
+Info    : 132626 nodes
+Info    : 813000 elements
+Info    : Done reading '/home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/masters-thesis-2024/postprocessing-no-subpixel/constrained-dielectric/mesh.msh'
+typeof(reuse_y2) = Emitter3DTopOpt.Reuse{Tuple{GridapPardiso.PardisoSymbolicSetup{ComplexF64, Int64, SparseArrays.SparseMatrixCSC{ComplexF64, Int64}}, GridapPardiso.PardisoNumericalSetup{ComplexF64, Int64}, GridapPardiso.PardisoSolver}, Tuple{GridapPardiso.PardisoSymbolicSetup{Float64, Int64, SparseArrays.SparseMatrixCSC{Float64, Int64}}, GridapPardiso.PardisoNumericalSetup{Float64, Int64}, GridapPardiso.PardisoSolver}}
+(λ, nf, hr) = (532.0, 1.3304134695650072, 199.93784344875246)
+Done Generating Mesh!
+geometry = Emitter3DTopOpt.SymmetricGeometry(238.13858394283562, 238.13858394283562, 599.8135303462574, 399.8756868975049, 199.93784344875246, 200.0, 200.0, 0.0, 10.0, 5.0, 10.0, 0)
+bad_vertices = Int64[]
+dirichlet_tags = ["FacesY"]
+flag_dct = true
+control.b1 = 1.0e-8
+phys_1 = Emitter3DTopOpt.PhysicalParameters(0.01181049869770599, 0.0, 1.3304134695650072 + 0.0im, 2.0562257975634557 - 0.0im, 1.4607120104689715 - 0.0im, 1.0, -299.9067651731287, -99.90676517312869, 0.0, ComplexF64[1.0 + 0.0im 0.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 1.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 0.0 + 0.0im 1.0 + 0.0im], false)
+phys_2 = Emitter3DTopOpt.PhysicalParameters(0.01181049869770599, 0.0, 1.3304134695650072 + 0.0im, 2.0562257975634557 - 0.0im, 1.4607120104689715 - 0.0im, 1.0, -299.9067651731287, -99.90676517312869, 0.0, ComplexF64[1.0 + 0.0im 0.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 1.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 0.0 + 0.0im 1.0 + 0.0im], false)
+control = Emitter3DTopOpt.Control(true, true, false, false, true, false, true, (20.0, 20.0, 20.0), (0.0, 0.0, 0.0), 0.0, 11.0, Inf, 0.5, 0.75, 0.25, 1.0e-8, 25600.0, 1.0, 10000.0)
+typeof(obj) = Emitter3DTopOpt.Objective{Emitter3DTopOpt.AmHead, Emitter3DTopOpt.E4Monodirectional, Emitter3DTopOpt.AmFoundry, Emitter3DTopOpt.Local, Emitter3DTopOpt.Isotropic, Emitter3DTopOpt.Smoothing}
+Optimizing...
+Post Processing...make_conformal = false
+plotting...
+working on results...
+issymmetric = true
+"Setting up new solver" = "Setting up new solver"
+done saving...
+working on results...
+issymmetric = true
+"Setting up new solver" = "Setting up new solver"
+done saving...
+working on results...
+issymmetric = true
+done saving...
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 482.0)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (482.0, 11.088337631675552, 11.088337631675552, 22.176675263351104, 454461.80192653055)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 488.1875657625367)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (488.1875657625367, 11.196306317474582, 11.196306317474582, 22.392612634949163, 454661.6073275425)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 493.68598406389043)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (493.68598406389043, 11.413979482426921, 11.413979482426921, 22.827958964853842, 454905.0928915923)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 498.5720095183121)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (498.5720095183121, 11.732716917957944, 11.732716917957944, 23.46543383591589, 455165.8590301346)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 502.91384810403383)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (502.91384810403383, 12.169927446670911, 12.169927446670911, 24.339854893341823, 455427.1860051678)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 506.77210927772506)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (506.77210927772506, 12.762097377967198, 12.762097377967198, 25.524194755934396, 455678.5771990892)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 510.2006520460737)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (510.2006520460737, 13.56657604890607, 13.56657604890607, 27.13315209781214, 455914.19938482286)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 513.2473368051434)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (513.2473368051434, 14.669419160663011, 14.669419160663011, 29.338838321326023, 456131.23596299294)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 515.9546934427328)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (515.9546934427328, 16.199621701088915, 16.199621701088915, 32.39924340217783, 456328.77137999516)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 518.3605150300432)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (518.3605150300432, 18.34808765068216, 18.34808765068216, 36.69617530136432, 456507.22982547974)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 520.4983853902341)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (520.4983853902341, 21.394612736486, 21.394612736486, 42.789225472972, 456667.43454066676)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 522.3981479084068)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (522.3981479084068, 25.808847188695733, 25.808847188695733, 51.617694377391466, 456810.58850401925)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 524.0863221273204)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (524.0863221273204, 32.32772682241477, 32.32772682241477, 64.65545364482954, 456938.1259545653)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 525.5864739442674)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (525.5864739442674, 42.14858403665132, 42.14858403665132, 84.29716807330264, 457051.513836158)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 526.9195445768336)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (526.9195445768336, 57.21857467049584, 57.21857467049584, 114.43714934099168, 457152.17743761226)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 528.1041428897079)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (528.1041428897079, 80.58975018622002, 80.58975018622002, 161.17950037244003, 457241.4588767454)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 529.1568051632463)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (529.1568051632463, 116.4009368310597, 116.4009368310597, 232.8018736621194, 457320.5965073366)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 530.0922259300061)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (530.0922259300061, 167.6719612589487, 167.6719612589487, 335.3439225178974, 457390.71737182816)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 530.9234631015864)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (530.9234631015864, 228.29051645001672, 228.29051645001672, 456.58103290003345, 457452.8375451589)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 531.6621202492253)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (531.6621202492253, 273.81118793835526, 273.81118793835526, 547.6223758767105, 457507.86703240493)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 532.3378797507747)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (532.3378797507747, 278.3007827821324, 278.3007827821324, 556.6015655642648, 457558.05350308074)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 533.0765368984136)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (533.0765368984136, 236.87124718288445, 236.87124718288445, 473.7424943657689, 457612.7234531785)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 533.9077740699939)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (533.9077740699939, 172.8400119150607, 172.8400119150607, 345.6800238301214, 457673.9906244761)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 534.8431948367537)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (534.8431948367537, 119.01450678790825, 119.01450678790825, 238.0290135758165, 457742.58569099323)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 535.8958571102921)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (535.8958571102921, 91.34192002849741, 91.34192002849741, 182.68384005699482, 457819.43244831084)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 537.0804554231664)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (537.0804554231664, 83.00244400289428, 83.00244400289428, 166.00488800578856, 457905.25808242563)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 538.4135260557326)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (538.4135260557326, 60.21817152801632, 60.21817152801632, 120.43634305603264, 458000.9267001251)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 539.9136778726796)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (539.9136778726796, 41.91441149968024, 41.91441149968024, 83.82882299936048, 458107.3231051968)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 541.6018520915932)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (541.6018520915932, 31.19102554744325, 31.19102554744325, 62.3820510948865, 458225.31074708194)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 543.5016146097659)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (543.5016146097659, 24.677674629981666, 24.677674629981666, 49.35534925996333, 458355.68042425276)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 545.6394849699568)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (545.6394849699568, 20.507745531601806, 20.507745531601806, 41.01549106320361, 458499.07589945337)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 548.0453065572672)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (548.0453065572672, 17.73082281873376, 17.73082281873376, 35.46164563746752, 458655.88866821106)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 550.7526631948566)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (550.7526631948566, 15.827468216816266, 15.827468216816266, 31.654936433632532, 458826.1123024757)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 553.7993479539264)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (553.7993479539264, 14.494401465597841, 14.494401465597841, 28.988802931195682, 459009.16091158567)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 557.227890722275)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (557.227890722275, 13.545449709989022, 13.545449709989022, 27.090899419978044, 459204.1133578477)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 561.0861518959662)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (561.0861518959662, 12.861507696063782, 12.861507696063782, 25.723015392127564, 459407.8771649264)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 565.427990481688)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (565.427990481688, 12.364329863672321, 12.364329863672321, 24.728659727344642, 459616.192467817)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 570.3140159361096)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (570.3140159361096, 12.001558596292234, 12.001558596292234, 24.00311719258447, 459822.6553289681)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 575.8124342374633)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (575.8124342374633, 11.738903681435941, 11.738903681435941, 23.477807362871882, 460018.55593840254)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 582.0)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (582.0, 11.547424321309457, 11.547424321309457, 23.094848642618913, 460191.5343370206)
+"entering visualize_new..." = "entering visualize_new..."
+  Activating project at `~/GitHub/Emitter3DTopOpt`

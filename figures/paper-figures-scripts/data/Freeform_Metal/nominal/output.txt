@@ -1,0 +1,423 @@
+Job number: 547468
+yaml_file = "resume.yaml"
+post_process = true
+α: 0.0
+full_y: false
+mat_s: Ag
+full_x: false
+hd: 100.0
+qorder: 6
+flag_foundry: false
+c0: 25600
+l1: 12.5
+ηd: 0.25
+γ: 1.0
+ηe: 0.75
+bidirectional: false
+mat_m: Ag
+hsub: 50.0
+R_nl: 0.0
+flag_t: true
+init: ["results.jld2"]
+λ2: 532.0
+make_conformal: false
+λ1: 532.0
+flag_f: true
+firststep: true
+α_list: [0.0]
+R_f: 20.0
+flag_c: true
+root: /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/masters-thesis-2024/postprocessing-no-subpixel/freeform-metal-monodirectional/
+R_er: 0.0
+flag_adam: false
+flagV: true
+subpixel: true
+flagS: false
+genmesh: true
+flag_nd: false
+θ1: 0.0
+Eₜₕ: 10000.0
+b1: 6.0e-6
+l3: 12.5
+norder: 0
+θ2: 0.0
+β: Inf
+nonlocal: false
+meshfile: mesh.msh
+l2: 2.9
+R_s: 1.5
+flag_r: false
+mesh_type: Box
+η: 0.5
+β_list: [Inf]
+max_iter: 50
+sweep_e: true
+full_cell: false
+sweep_p: false
+Info    : Reading '/home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/masters-thesis-2024/postprocessing-no-subpixel/freeform-metal-monodirectional/mesh.msh'...
+Info    : 99 entities
+Info    : 144641 nodes
+Info    : 901331 elements
+Info    : Done reading '/home/gridsan/ihammond/GitHub/Emitter3DTopOpt/experimental/masters-thesis-2024/postprocessing-no-subpixel/freeform-metal-monodirectional/mesh.msh'
+typeof(reuse_y2) = Emitter3DTopOpt.Reuse{Tuple{GridapPardiso.PardisoSymbolicSetup{ComplexF64, Int64, SparseArrays.SparseMatrixCSC{ComplexF64, Int64}}, GridapPardiso.PardisoNumericalSetup{ComplexF64, Int64}, GridapPardiso.PardisoSolver}, Tuple{GridapPardiso.PardisoSymbolicSetup{Float64, Int64, SparseArrays.SparseMatrixCSC{Float64, Int64}}, GridapPardiso.PardisoNumericalSetup{Float64, Int64}, GridapPardiso.PardisoSolver}}
+(λ, nf, hr) = (532.0, 1.3304134695650072, 199.93784344875246)
+Done Generating Mesh!
+geometry = Emitter3DTopOpt.SymmetricGeometry(184.28757605350117, 184.28757605350117, 599.8135303462574, 399.8756868975049, 199.93784344875246, 100.0, 50.0, 0.0, 12.5, 2.9, 12.5, 0)
+bad_vertices = Int64[]
+dirichlet_tags = ["FacesY"]
+flag_dct = true
+control.b1 = 6.0e-6
+phys_1 = Emitter3DTopOpt.PhysicalParameters(0.01181049869770599, 0.0, 1.3304134695650072 + 0.0im, 0.054007220216606505 - 3.42898916967509im, 0.054007220216606505 - 3.42898916967509im, 1.0, -324.9067651731287, -224.9067651731287, 0.0, ComplexF64[1.0 + 0.0im 0.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 1.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 0.0 + 0.0im 1.0 + 0.0im], false)
+phys_2 = Emitter3DTopOpt.PhysicalParameters(0.01181049869770599, 0.0, 1.3304134695650072 + 0.0im, 0.054007220216606505 - 3.42898916967509im, 0.054007220216606505 - 3.42898916967509im, 1.0, -324.9067651731287, -224.9067651731287, 0.0, ComplexF64[1.0 + 0.0im 0.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 1.0 + 0.0im 0.0 + 0.0im; 0.0 + 0.0im 0.0 + 0.0im 1.0 + 0.0im], false)
+control = Emitter3DTopOpt.Control(true, true, false, false, true, false, true, (20.0, 20.0, 20.0), (0.0, 0.0, 0.0), 0.0, 1.5, Inf, 0.5, 0.75, 0.25, 6.0e-6, 25600.0, 1.0, 10000.0)
+typeof(obj) = Emitter3DTopOpt.Objective{Emitter3DTopOpt.AmHead, Emitter3DTopOpt.E4Monodirectional, Emitter3DTopOpt.NotFoundry, Emitter3DTopOpt.Local, Emitter3DTopOpt.Isotropic, Emitter3DTopOpt.Smoothing}
+Optimizing...
+Post Processing...make_conformal = false
+plotting...
+working on results...
+issymmetric = true
+"Setting up new solver" = "Setting up new solver"
+done saving...
+working on results...
+issymmetric = true
+"Setting up new solver" = "Setting up new solver"
+done saving...
+working on results...
+issymmetric = true
+done saving...
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 482.0)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (482.0, 13.502576726223195, 13.502576726223195, 27.00515345244639, 1.3566103770147678e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 488.1875657625367)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (488.1875657625367, 37.19823124986856, 37.19823124986856, 74.39646249973713, 1.3817867448136401e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 493.68598406389043)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (493.68598406389043, 69.8330452998236, 69.8330452998236, 139.6660905996472, 1.3999417188579782e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 498.5720095183121)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (498.5720095183121, 108.64729071669849, 108.64729071669849, 217.29458143339698, 1.4127834769818562e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 502.91384810403383)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (502.91384810403383, 150.7897028348975, 150.7897028348975, 301.579405669795, 1.4216512835456505e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 506.77210927772506)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (506.77210927772506, 193.4425932853481, 193.4425932853481, 386.8851865706962, 1.4275794676039794e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 510.2006520460737)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (510.2006520460737, 234.24423167117033, 234.24423167117033, 468.48846334234065, 1.4313597122836984e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 513.2473368051434)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (513.2473368051434, 271.46305692664583, 271.46305692664583, 542.9261138532917, 1.4335866738830605e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 515.9546934427328)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (515.9546934427328, 304.0362371715557, 304.0362371715557, 608.0724743431114, 1.4347036769278771e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 518.3605150300432)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (518.3605150300432, 331.5034302003637, 331.5034302003637, 663.0068604007274, 1.4350393340609202e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 520.4983853902341)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (520.4983853902341, 353.88474299511444, 353.88474299511444, 707.7694859902289, 1.4348360012701454e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 522.3981479084068)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (522.3981479084068, 370.5449351330173, 370.5449351330173, 741.0898702660346, 1.4341099142196462e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 524.0863221273204)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (524.0863221273204, 382.77926237739825, 382.77926237739825, 765.5585247547965, 1.4331333001873444e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 525.5864739442674)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (525.5864739442674, 391.5233271314061, 391.5233271314061, 783.0466542628122, 1.4320405677017642e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 526.9195445768336)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (526.9195445768336, 397.4549626971833, 397.4549626971833, 794.9099253943666, 1.4308963810663163e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 528.1041428897079)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (528.1041428897079, 401.1898412242578, 401.1898412242578, 802.3796824485156, 1.429746045145183e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 529.1568051632463)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (529.1568051632463, 403.2567398183879, 403.2567398183879, 806.5134796367759, 1.4286206684536503e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 530.0922259300061)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (530.0922259300061, 404.09136414619996, 404.09136414619996, 808.1827282923999, 1.427541123598882e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 530.9234631015864)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (530.9234631015864, 404.0414403412528, 404.0414403412528, 808.0828806825056, 1.42652095349932e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 531.6621202492253)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (531.6621202492253, 403.37815197807686, 403.37815197807686, 806.7563039561537, 1.4255660488029344e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 532.3378797507747)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (532.3378797507747, 402.27019915410517, 402.27019915410517, 804.5403983082103, 1.4246503238526755e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 533.0765368984136)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (533.0765368984136, 400.52290722727037, 400.52290722727037, 801.0458144545407, 1.4236064379477168e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 533.9077740699939)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (533.9077740699939, 397.9070685576669, 397.9070685576669, 795.8141371153338, 1.4223803244687836e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 534.8431948367537)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (534.8431948367537, 394.1764925212058, 394.1764925212058, 788.3529850424115, 1.4209360511404597e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 535.8958571102921)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (535.8958571102921, 389.0418586876277, 389.0418586876277, 778.0837173752554, 1.4192301470859325e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 537.0804554231664)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (537.0804554231664, 382.1756218970783, 382.1756218970783, 764.3512437941566, 1.4172102257290022e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 538.4135260557326)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (538.4135260557326, 373.2258506505515, 373.2258506505515, 746.451701301103, 1.4148131072290882e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 539.9136778726796)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (539.9136778726796, 361.84255770187644, 361.84255770187644, 723.6851154037529, 1.4119626399516915e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 541.6018520915932)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (541.6018520915932, 347.71934178866394, 347.71934178866394, 695.4386835773279, 1.4085672027965472e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 543.5016146097659)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (543.5016146097659, 330.65029497228323, 330.65029497228323, 661.3005899445665, 1.4045168733624243e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 545.6394849699568)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (545.6394849699568, 310.59653713608543, 310.59653713608543, 621.1930742721709, 1.399680278474486e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 548.0453065572672)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (548.0453065572672, 287.74898787032527, 287.74898787032527, 575.4979757406505, 1.3939011894609942e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 550.7526631948566)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (550.7526631948566, 265.586327650658, 265.586327650658, 531.172655301316, 1.3874492734337708e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 553.7993479539264)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (553.7993479539264, 242.34931913769304, 242.34931913769304, 484.6986382753861, 1.3798425360012318e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 557.227890722275)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (557.227890722275, 217.8642192243222, 217.8642192243222, 435.7284384486444, 1.3707196611897196e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 561.0861518959662)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (561.0861518959662, 192.9362711637459, 192.9362711637459, 385.8725423274918, 1.3597991348492657e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 565.427990481688)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (565.427990481688, 168.40912092244827, 168.40912092244827, 336.81824184489653, 1.3467615896003777e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 570.3140159361096)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (570.3140159361096, 145.05543021816, 145.05543021816, 290.11086043632, 1.3312518608738473e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 575.8124342374633)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (575.8124342374633, 123.48592414777757, 123.48592414777757, 246.97184829555513, 1.3128853460154186e6)
+((2π) / phys_1.ω, (2π) / phys_2.ω) = (532.0, 582.0)
+issymmetric = true
+issymmetric = true
+issymmetric = true
+issymmetric = true
+(λ_, gy, gx, gg, norm_xy) = (582.0, 104.09826149394813, 104.09826149394813, 208.19652298789626, 1.2912607712590627e6)
+"entering visualize_new..." = "entering visualize_new..."
+[0m[31m2025-04-30 16:07:01.938 (  19.160s) [    7FD9A2FAA0C0]vtkXOpenGLRenderWindow.:456    ERR| vtkXOpenGLRenderWindow (0x8879f6f0): bad X server connection. DISPLAY=:99. Aborting.
+[0m
+ERROR:root:bad X server connection. DISPLAY=:99. Aborting.
+
+[1841877] signal (6.-6): Aborted
+in expression starting at /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/include/SuperYaml.jl:155
+pthread_kill at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+raise at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+abort at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+_ZN22vtkXOpenGLRenderWindow13CreateAWindowEv at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/libvtkRenderingOpenGL2-9.3.so (unknown line)
+_ZN22vtkXOpenGLRenderWindow16WindowInitializeEv at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/libvtkRenderingOpenGL2-9.3.so (unknown line)
+_ZN22vtkXOpenGLRenderWindow5StartEv at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/libvtkRenderingOpenGL2-9.3.so (unknown line)
+_ZN15vtkRenderWindow6RenderEv at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/libvtkRenderingCore-9.3.so (unknown line)
+_ZN21vtkOpenGLRenderWindow6RenderEv at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/libvtkRenderingOpenGL2-9.3.so (unknown line)
+_ZN22vtkXOpenGLRenderWindow6RenderEv at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/libvtkRenderingOpenGL2-9.3.so (unknown line)
+_ZL31PyvtkXOpenGLRenderWindow_RenderP7_objectS0_ at /home/gridsan/ihammond/.local/lib/python3.10/site-packages/vtkmodules/vtkRenderingOpenGL2.cpython-310-x86_64-linux-gnu.so (unknown line)
+cfunction_call at /usr/local/src/conda/python-3.10.10/Objects/methodobject.c:552
+_PyObject_MakeTpCall at /usr/local/src/conda/python-3.10.10/Objects/call.c:215
+_PyObject_VectorcallTstate at /usr/local/src/conda/python-3.10.10/Include/cpython/abstract.h:112 [inlined]
+_PyObject_VectorcallTstate at /usr/local/src/conda/python-3.10.10/Include/cpython/abstract.h:99 [inlined]
+PyObject_Vectorcall at /usr/local/src/conda/python-3.10.10/Include/cpython/abstract.h:123 [inlined]
+call_function at /usr/local/src/conda/python-3.10.10/Python/ceval.c:5891 [inlined]
+_PyEval_EvalFrameDefault at /usr/local/src/conda/python-3.10.10/Python/ceval.c:4181
+_PyEval_EvalFrame at /usr/local/src/conda/python-3.10.10/Include/internal/pycore_ceval.h:46 [inlined]
+_PyEval_Vector at /usr/local/src/conda/python-3.10.10/Python/ceval.c:5065 [inlined]
+_PyFunction_Vectorcall at /usr/local/src/conda/python-3.10.10/Objects/call.c:342
+_PyObject_VectorcallTstate at /usr/local/src/conda/python-3.10.10/Include/cpython/abstract.h:114 [inlined]
+PyObject_Vectorcall at /usr/local/src/conda/python-3.10.10/Include/cpython/abstract.h:123 [inlined]
+call_function at /usr/local/src/conda/python-3.10.10/Python/ceval.c:5891 [inlined]
+_PyEval_EvalFrameDefault at /usr/local/src/conda/python-3.10.10/Python/ceval.c:4198
+_PyEval_EvalFrame at /usr/local/src/conda/python-3.10.10/Include/internal/pycore_ceval.h:46 [inlined]
+_PyEval_Vector at /usr/local/src/conda/python-3.10.10/Python/ceval.c:5065 [inlined]
+_PyFunction_Vectorcall at /usr/local/src/conda/python-3.10.10/Objects/call.c:342 [inlined]
+_PyObject_VectorcallTstate at /usr/local/src/conda/python-3.10.10/Include/cpython/abstract.h:114 [inlined]
+method_vectorcall at /usr/local/src/conda/python-3.10.10/Objects/classobject.c:53
+PyVectorcall_Call at /usr/local/src/conda/python-3.10.10/Objects/call.c:267 [inlined]
+_PyObject_Call at /usr/local/src/conda/python-3.10.10/Objects/call.c:290 [inlined]
+PyObject_Call at /usr/local/src/conda/python-3.10.10/Objects/call.c:317
+macro expansion at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/exception.jl:108 [inlined]
+#107 at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/pyfncall.jl:43 [inlined]
+disable_sigint at ./c.jl:473 [inlined]
+__pycall! at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/pyfncall.jl:42 [inlined]
+_pycall! at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/pyfncall.jl:29
+_pycall! at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/pyfncall.jl:11 [inlined]
+#_#114 at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/pyfncall.jl:86
+PyObject at /home/gridsan/ihammond/.julia/packages/PyCall/1gn3u/src/pyfncall.jl:86
+unknown function (ip: 0x7fd5807946c6)
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+visualizepost at /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/Vis.jl:191
+visualizepost at /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/Vis.jl:125
+unknown function (ip: 0x7fd580786d92)
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+#PostProcess#27 at /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/include/Setup.jl:1137
+PostProcess at /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/include/Setup.jl:1035
+unknown function (ip: 0x7fd5e2fa353d)
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+main at /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/include/SuperYaml.jl:148
+unknown function (ip: 0x7fd914349562)
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+jl_apply at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/julia.h:1879 [inlined]
+do_call at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/interpreter.c:126
+eval_value at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/interpreter.c:226
+eval_stmt_value at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/interpreter.c:177 [inlined]
+eval_body at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/interpreter.c:624
+jl_interpret_toplevel_thunk at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/interpreter.c:762
+jl_toplevel_eval_flex at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/toplevel.c:912
+jl_toplevel_eval_flex at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/toplevel.c:856
+ijl_toplevel_eval_in at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/toplevel.c:971
+eval at ./boot.jl:370 [inlined]
+include_string at ./loading.jl:1899
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+_include at ./loading.jl:1959
+include at ./Base.jl:457
+jfptr_include_31033.clone_1 at /home/gridsan/ihammond/binaries/julia-1.9.1/lib/julia/sys.so (unknown line)
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+exec_options at ./client.jl:307
+_start at ./client.jl:522
+jfptr__start_29455.clone_1 at /home/gridsan/ihammond/binaries/julia-1.9.1/lib/julia/sys.so (unknown line)
+_jl_invoke at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2758 [inlined]
+ijl_apply_generic at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/gf.c:2940
+jl_apply at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/julia.h:1879 [inlined]
+true_main at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/jlapi.c:573
+jl_repl_entrypoint at /cache/build/default-amdci4-6/julialang/julia-release-1-dot-9/src/jlapi.c:717
+main at julia (unknown line)
+unknown function (ip: 0x7fd9a2ff7d8f)
+__libc_start_main at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
+unknown function (ip: 0x401098)
+Allocations: 1368578737 (Pool: 1368365320; Big: 213417); GC: 402
+/var/spool/slurmd/job547468/slurm_script: line 13: 1841877 Aborted                 OMP_NUM_THREADS=40 JULIA_NUM_THREADS=40 julia /home/gridsan/ihammond/GitHub/Emitter3DTopOpt/src/include/SuperYaml.jl $1 1 0
