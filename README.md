@@ -2,7 +2,7 @@
 
 [![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://ianmatthewhammond.github.io/DistributedEmitterOpt.jl/dev/)
 
-Adjoint-based topology optimization for nanophotonic SERS substrates.
+Adjoint-based topology optimization for nanophotonic SERS substrates and other distributed emission problems.
 
 ## Installation
 
