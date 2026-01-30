@@ -46,8 +46,7 @@ function build_multi_output_problem(; foundry_mode::Bool)
     end
 
     meshfile = tempname() * ".msh"
-    genperiodic(geo, meshfile; per_x=true, per_y=foundry_mode)
-    sim = build_simulation(meshfile; foundry_mode, dir_x=false, dir_y=!foundry_mode)
+    genmesh(geo, meshfile; per_x=false, per_y=false)
 
     env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
     inputs = [FieldConfig(532.0; θ=0.0, pol=:y)]
@@ -76,7 +75,9 @@ function build_multi_output_problem(; foundry_mode::Bool)
     )
 
     solver = UmfpackSolver()
-    prob = OptimizationProblem(pde, objective, sim, solver;
+    prob = OptimizationProblem(pde, objective, meshfile, solver;
+        per_x=false,
+        per_y=false,
         foundry_mode=foundry_mode,
         control=control
     )

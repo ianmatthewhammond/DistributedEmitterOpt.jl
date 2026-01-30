@@ -10,6 +10,7 @@ docs/build/
 # IDE
 .vscode/
 .idea/
+*.claude
 
 # OS
 .DS_Store
@@ -22,3 +23,6 @@ Thumbs.db
 # Big files
 *.vtu
 *.msh
+
+# Debugging junk
+scripts/experiments/debug

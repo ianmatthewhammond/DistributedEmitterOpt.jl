@@ -5,11 +5,31 @@ Helpers to support polarization-dependent simulations (e.g. x vs y),
 while sharing the same discrete model.
 """
 
+"""
+    SimulationBundle
+
+Container for multiple `Simulation` objects (per polarization), sharing the same
+underlying discrete model.
+
+# Fields
+- `default::Simulation`: The primary simulation (usually y-polarized)
+- `by_pol::Dict{Symbol,Simulation}`: Sims keyed by polarization (:x, :y)
+"""
 struct SimulationBundle
     default::Simulation
     by_pol::Dict{Symbol,Simulation}
 end
 
+"""
+    SolverPoolBundle
+
+Container for multiple `SolverCachePool` objects (per polarization), corresponding
+to the `Simulation` objects in a bundle.
+
+# Fields
+- `default::SolverCachePool`: The primary pool
+- `by_pol::Dict{Symbol,SolverCachePool}`: Pools keyed by polarization (:x, :y)
+"""
 struct SolverPoolBundle
     default::SolverCachePool
     by_pol::Dict{Symbol,SolverCachePool}
@@ -19,17 +39,37 @@ end
 # Helpers
 # ---------------------------------------------------------------------------
 
+"""
+    default_sim(sim_or_bundle)
+
+Get the default `Simulation` from a Simulation or SimulationBundle.
+"""
 default_sim(sim::Simulation) = sim
 default_sim(bundle::SimulationBundle) = bundle.default
 
+"""
+    sim_for(sim_or_bundle, fc::FieldConfig)
+
+Get the appropriate `Simulation` for a given `FieldConfig` (based on polarization).
+"""
 sim_for(sim::Simulation, fc::FieldConfig) = sim
 sim_for(bundle::SimulationBundle, fc::FieldConfig) =
     get(bundle.by_pol, fc.polarization, bundle.default)
 
+"""
+    pool_for(pool_or_bundle, fc::FieldConfig)
+
+Get the appropriate `SolverCachePool` for a given `FieldConfig`.
+"""
 pool_for(pool::SolverCachePool, fc::FieldConfig) = pool
 pool_for(bundle::SolverPoolBundle, fc::FieldConfig) =
     get(bundle.by_pol, fc.polarization, bundle.default)
 
+"""
+    default_pool(pool_or_bundle)
+
+Get the default `SolverCachePool` from a pool or bundle.
+"""
 default_pool(pool::SolverCachePool) = pool
 default_pool(bundle::SolverPoolBundle) = bundle.default
 

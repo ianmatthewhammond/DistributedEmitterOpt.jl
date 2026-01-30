@@ -1,0 +1,16 @@
+- Update documentation
+- More examples
+- Fixed adjoints for x grid to y grid
+- Fixed caching when to clear
+- Eigensolver finish up
+- README that cites arXiv paper
+- Publish to GitHub + docs
+- Publish to julia registry
+- New features
+    - Pardiso
+    - MUMPS
+    - More high level control (e.g. periodicity + boundary condition setup)
+- E^2 regularization
+    - Nonlocal
+    - Plotting routines
+- Submit jobs on supercloud to recreate results

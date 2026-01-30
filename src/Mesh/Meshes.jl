@@ -201,18 +201,18 @@ function box_legacy(tt::TagTracker, args...; kwargs...)
     bx.p_bul = typeof(bul) <: Tuple ? mod.addPoint(bul..., itp!(tt)) : bul
 
     # Add 12 lines
-    bx.l_fb = (:l_fb in kkeys) ? - getindex(kwargs, :l_fb) : mod.addLine(bx.p_fll,  bx.p_flr,  itl!(tt))
-    bx.l_fr = (:l_fr in kkeys) ? - getindex(kwargs, :l_fr) : mod.addLine(bx.p_flr,  bx.p_fur,  itl!(tt))
-    bx.l_ft = (:l_ft in kkeys) ? - getindex(kwargs, :l_ft) : mod.addLine(bx.p_fur,  bx.p_ful,  itl!(tt))
-    bx.l_fl = (:l_fl in kkeys) ? - getindex(kwargs, :l_fl) : mod.addLine(bx.p_ful,  bx.p_fll,  itl!(tt))
-    bx.l_bb = (:l_bb in kkeys) ? - getindex(kwargs, :l_bb) : mod.addLine(bx.p_bll,  bx.p_blr,  itl!(tt))
-    bx.l_br = (:l_br in kkeys) ? - getindex(kwargs, :l_br) : mod.addLine(bx.p_blr,  bx.p_bur,  itl!(tt))
-    bx.l_bt = (:l_bt in kkeys) ? - getindex(kwargs, :l_bt) : mod.addLine(bx.p_bur,  bx.p_bul,  itl!(tt))
-    bx.l_bl = (:l_bl in kkeys) ? - getindex(kwargs, :l_bl) : mod.addLine(bx.p_bul,  bx.p_bll,  itl!(tt))
-    bx.l_f2bll = (:l_f2bll in kkeys) ? getindex(kwargs, :l_f2bll) : mod.addLine(bx.p_fll,  bx.p_bll,  itl!(tt))
-    bx.l_f2blr = (:l_f2blr in kkeys) ? getindex(kwargs, :l_f2blr) : mod.addLine(bx.p_flr,  bx.p_blr,  itl!(tt))
-    bx.l_f2bul = (:l_f2bul in kkeys) ? getindex(kwargs, :l_f2bul) : mod.addLine(bx.p_ful,  bx.p_bul,  itl!(tt))
-    bx.l_f2bur = (:l_f2bur in kkeys) ? getindex(kwargs, :l_f2bur) : mod.addLine(bx.p_fur,  bx.p_bur,  itl!(tt))
+    bx.l_fb = (:l_fb in kkeys) ? -getindex(kwargs, :l_fb) : mod.addLine(bx.p_fll, bx.p_flr, itl!(tt))
+    bx.l_fr = (:l_fr in kkeys) ? -getindex(kwargs, :l_fr) : mod.addLine(bx.p_flr, bx.p_fur, itl!(tt))
+    bx.l_ft = (:l_ft in kkeys) ? -getindex(kwargs, :l_ft) : mod.addLine(bx.p_fur, bx.p_ful, itl!(tt))
+    bx.l_fl = (:l_fl in kkeys) ? -getindex(kwargs, :l_fl) : mod.addLine(bx.p_ful, bx.p_fll, itl!(tt))
+    bx.l_bb = (:l_bb in kkeys) ? -getindex(kwargs, :l_bb) : mod.addLine(bx.p_bll, bx.p_blr, itl!(tt))
+    bx.l_br = (:l_br in kkeys) ? -getindex(kwargs, :l_br) : mod.addLine(bx.p_blr, bx.p_bur, itl!(tt))
+    bx.l_bt = (:l_bt in kkeys) ? -getindex(kwargs, :l_bt) : mod.addLine(bx.p_bur, bx.p_bul, itl!(tt))
+    bx.l_bl = (:l_bl in kkeys) ? -getindex(kwargs, :l_bl) : mod.addLine(bx.p_bul, bx.p_bll, itl!(tt))
+    bx.l_f2bll = (:l_f2bll in kkeys) ? getindex(kwargs, :l_f2bll) : mod.addLine(bx.p_fll, bx.p_bll, itl!(tt))
+    bx.l_f2blr = (:l_f2blr in kkeys) ? getindex(kwargs, :l_f2blr) : mod.addLine(bx.p_flr, bx.p_blr, itl!(tt))
+    bx.l_f2bul = (:l_f2bul in kkeys) ? getindex(kwargs, :l_f2bul) : mod.addLine(bx.p_ful, bx.p_bul, itl!(tt))
+    bx.l_f2bur = (:l_f2bur in kkeys) ? getindex(kwargs, :l_f2bur) : mod.addLine(bx.p_fur, bx.p_bur, itl!(tt))
 
     # Add curve loops
     bx.cl_f = (:cl_f in kkeys) ? getindex(kwargs, :cl_f) : mod.addCurveLoop([bx.l_fb, bx.l_fr, bx.l_ft, bx.l_fl], itcl!(tt))
@@ -241,7 +241,7 @@ end
 function boxabove(bx_below::Box, tt::TagTracker, fll, flr, ful, fur, bll, blr, bul, bur; mod=gmsh.model.geo)
     tos = ["p_fll", "p_flr", "p_bll", "p_blr", "l_fb", "l_f2bll", "l_bb", "l_f2blr", "cl_u", "ps_u"]
     fros = ["p_ful", "p_fur", "p_bul", "p_bur", "l_ft", "l_f2bul", "l_bt", "l_f2bur", "cl_t", "ps_t"]
-    kwargs = Dict{Symbol, Any}(Symbol(to) => getproperty(bx_below, Symbol(fro)) for (to, fro) in zip(tos, fros))
+    kwargs = Dict{Symbol,Any}(Symbol(to) => getproperty(bx_below, Symbol(fro)) for (to, fro) in zip(tos, fros))
     return box(tt, fll, flr, ful, fur, bll, blr, bul, bur; mod=mod, kwargs...)
 end
 
@@ -249,7 +249,7 @@ end
 function boxabove_legacy(bx::Box, tt::TagTracker, args...; mod=gmsh.model.geo)
     tos = ["p_fll", "p_flr", "p_bll", "p_blr", "l_fb", "l_f2bll", "l_bb", "l_f2blr", "cl_u", "ps_u"]
     fros = ["p_ful", "p_fur", "p_bul", "p_bur", "l_ft", "l_f2bul", "l_bt", "l_f2bur", "cl_t", "ps_t"]
-    kwargs = Dict{Symbol, Any}(Symbol(to) => getproperty(bx, Symbol(fro)) for (to, fro) in zip(tos, fros))
+    kwargs = Dict{Symbol,Any}(Symbol(to) => getproperty(bx, Symbol(fro)) for (to, fro) in zip(tos, fros))
     kwargs[:mod] = mod
     box_legacy(tt, args...; kwargs...)
 end
@@ -269,7 +269,7 @@ end
 
 Generate periodic mesh using the legacy box point order (Emitter3DTopOpt).
 """
-function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=true, per_y::Bool=true)
+function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false)
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 1)
     gmsh.option.setNumber("Mesh.Algorithm", 5)
