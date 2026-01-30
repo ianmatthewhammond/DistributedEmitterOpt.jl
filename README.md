@@ -1,4 +1,4 @@
-# DistributedEmitterOpt.jl
+# <img src="docs/src/assets/logo.png" alt="DistributedEmitterOpt logo" width="40" /> DistributedEmitterOpt.jl 
 
 [![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://ianmatthewhammond.github.io/DistributedEmitterOpt.jl/dev/)
 
