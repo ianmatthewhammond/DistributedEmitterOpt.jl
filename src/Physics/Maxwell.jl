@@ -39,8 +39,8 @@ end
 """
     ε_design(p, phys) -> ComplexF64
 
-Standard interpolation: (nf + (nm - nf)p)² - base²
-TODO: Implement [non-linear material interpolation for metallic-nanoparticles](https://www.sciencedirect.com/science/article/pii/S0045782518304328)
+Nonlinear Material interpolation: (nf + (nm - nf)p)² - base²
+See [A non-linear material interpolation for metallic-nanoparticles](https://www.sciencedirect.com/science/article/pii/S0045782518304328) for more information.
 This gives ε = ε_base when p=0 and ε = εm when p=1.
 """
 function ε_design_wf(p, phys)
