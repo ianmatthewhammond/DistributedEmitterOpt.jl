@@ -73,6 +73,19 @@ function curl_op(grad_u)
     VectorValue(c1, c2, c3)
 end
 
+"""
+    shifted_curl_op(grad_u, u, k, θ)
+
+Bloch-shifted curl used for oblique incidence:
+  ∇ₛ = ∇ + i k sin(θ) êy
+  ∇ₛ × u = ∇ × u + i k sin(θ) (êy × u)
+"""
+function shifted_curl_op(grad_u, u, k::Real, θ::Real)
+    β = im * k * sind(θ)
+    ey_cross_u = VectorValue(u[3], 0 * u[2], -u[1])
+    return curl_op(grad_u) + β * ey_cross_u
+end
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Assembly
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -109,14 +122,10 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
     sqrt_ε₀ = sqrt ∘ ε₀
     εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
 
-    # Curl operator applied to gradient (∇× via gradient tensor)
-    # This is the correct pattern for Nédélec elements in Gridap
-    ∇x = curl_op
-
     A_mat = assemble_matrix(sim.U, sim.V) do u, v
         (
-            # Curl-curl term: (∇×v)·(∇×u) implemented as ∇x(∇v)·∇x(∇u)
-            ∫((∇x ∘ (∇(v))) ⋅ (∇x ∘ (∇(u))))sim.dΩ -
+            # Shifted curl-curl term for oblique incidence (legacy ∇ₛ formulation)
+            ∫(shifted_curl_op(∇(v), v, k, phys.θ) ⋅ shifted_curl_op(∇(u), u, k, phys.θ))sim.dΩ -
             # Volume terms with background permittivity
             (k^2) * ∫(v ⋅ (ε₀ * u))sim.dΩ -
             # Design region permittivity

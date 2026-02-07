@@ -41,9 +41,10 @@ function assemble_eigen_matrices(pt, sim, phys::EigenPhysicalParams)
     ε₀ = x -> ε_background_wf(x, phys)
     √ε₀ = sqrt ∘ ε₀
     εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
+    k = 1.0
 
     K = assemble_matrix(sim.U, sim.V) do u, v
-        ∫((curl_op ∘ (∇(v))) ⋅ (curl_op ∘ (∇(u))))sim.dΩ
+        ∫(shifted_curl_op(∇(v), v, k, phys.θ) ⋅ shifted_curl_op(∇(u), u, k, phys.θ))sim.dΩ
     end
     C = assemble_matrix(sim.U, sim.V) do u, v
         im * cosd(phys.θ) * ∫(v ⋅ (u * √ε₀))sim.dS_top +
