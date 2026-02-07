@@ -35,7 +35,7 @@ Base.@kwdef mutable struct Control
 
     # ═══ SSP ═══
     use_ssp::Bool = false
-    R_ssp::Float64 = 11.0
+    R_ssp::Float64 = 0.55 * R_filter[1]
 
     # ═══ Linewidth Constraints ═══
     use_constraints::Bool = false

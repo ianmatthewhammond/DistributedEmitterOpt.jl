@@ -271,33 +271,26 @@ end
 Convolve x with kernel h using FFT (general boundaries).
 """
 function convolvefft(x::Matrix{Float64}; h::Matrix{Float64})
-    # Pad to avoid wraparound
-    nx, ny = size(x)
-    nxh, nyh = size(h)
+    # Legacy repeat + symmetric pad path (matches old codebase behavior)
+    sx, sy = size(x)
+    kx, ky = size(h)
 
-    # FFT size
-    nxpad = nx + nxh - 1
-    nypad = ny + nyh - 1
+    npx = Int(ceil((2 * kx - 1) / sx))
+    npy = Int(ceil((2 * ky - 1) / sy))
+    if npx % 2 == 0
+        npx += 1
+    end
+    if npy % 2 == 0
+        npy += 1
+    end
 
-    # Pad arrays
-    x_pad = zeros(Float64, nxpad, nypad)
-    h_pad = zeros(Float64, nxpad, nypad)
-    x_pad[1:nx, 1:ny] = x
-    h_pad[1:nxh, 1:nyh] = h
+    x_rep = repeat(x, outer=(npx, npy))
+    x_rep = edgepad(x_rep, ((0, 0), (0, 0)))
+    h_pad = properpad(h, (npx * sx, npy * sy))
+    h_pad ./= sum(h_pad)
 
-    # Center kernel
-    h_pad = circshift(h_pad, (-nxh ÷ 2, -nyh ÷ 2))
-
-    # FFT convolve
-    X = FFTW.fft(x_pad)
-    H = FFTW.fft(h_pad)
-    Y = X .* H
-    y_pad = real.(FFTW.ifft(Y))
-
-    # Extract valid region
-    y = y_pad[1:nx, 1:ny]
-
-    return y
+    xout = centeredfft(real.(FFTW.ifft(FFTW.fft(x_rep) .* FFTW.fft(h_pad))), (sx, sy))
+    return xout
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -330,7 +323,8 @@ function filter_grid(p_vec::Vector{Float64}, sim, control)
         resolution = (nx - 1) / Lx
         conic_filter_dct(R, Lx, Ly, resolution)
     else
-        conic_filter(R, Lx, Ly, nx, ny)
+        resolution = (nx - 1) / Lx
+        conic_filter(R, Lx, Ly, resolution)
     end
 
     # Reshape to 2D
@@ -365,7 +359,8 @@ function filter_grid_adjoint(∂g_∂pf::Vector{Float64}, sim, control)
         resolution = (nx - 1) / Lx
         conic_filter_dct(R, Lx, Ly, resolution)
     else
-        conic_filter(R, Lx, Ly, nx, ny)
+        resolution = (nx - 1) / Lx
+        conic_filter(R, Lx, Ly, resolution)
     end
 
     x = reshape(∂g_∂pf, (nx, ny))
