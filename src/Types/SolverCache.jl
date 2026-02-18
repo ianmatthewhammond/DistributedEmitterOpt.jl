@@ -11,6 +11,12 @@ Pardiso, UMFPACK, etc.
 """
 abstract type AbstractSolver end
 
+# Optional overload points for solvers that support in-place refactorization
+# and explicit memory release (e.g., Pardiso).
+lu!(solver::AbstractSolver, factor, A) = lu!(solver, A)
+filter_lu!(solver::AbstractSolver, factor, A) = filter_lu!(solver, A)
+release_factor!(::AbstractSolver, factor) = nothing
+
 """
     SolverCache{S<:AbstractSolver}
 
@@ -49,7 +55,11 @@ SolverCache(solver::S; kwargs...) where S<:AbstractSolver = SolverCache{S}(solve
 
 """Factorize Maxwell matrix."""
 function maxwell_lu!(cache::SolverCache, A)
-    cache.A_factor = lu!(cache.solver, A)
+    if isnothing(cache.A_factor)
+        cache.A_factor = lu!(cache.solver, A)
+    else
+        cache.A_factor = lu!(cache.solver, cache.A_factor, A)
+    end
 end
 
 """Solve Maxwell system."""
@@ -65,7 +75,11 @@ end
 
 """Factorize eigen shift matrix (A - σE)."""
 function eigen_lu!(cache::SolverCache, A)
-    cache.A_factor = lu!(cache.solver, A)
+    if isnothing(cache.A_factor)
+        cache.A_factor = lu!(cache.solver, A)
+    else
+        cache.A_factor = lu!(cache.solver, cache.A_factor, A)
+    end
 end
 
 """Solve eigen shift system."""
@@ -81,7 +95,11 @@ end
 
 """Factorize filter Helmholtz matrix."""
 function filter_lu!(cache::SolverCache, A)
-    cache.F_factor = filter_lu!(cache.solver, A)
+    if isnothing(cache.F_factor)
+        cache.F_factor = filter_lu!(cache.solver, A)
+    else
+        cache.F_factor = filter_lu!(cache.solver, cache.F_factor, A)
+    end
 end
 
 """Solve filter system."""
@@ -163,17 +181,46 @@ num_cached(pool::SolverCachePool) = length(pool.caches)
 """Clear all Maxwell factorizations (call when pt changes)."""
 function clear_maxwell_factors!(pool::SolverCachePool)
     for cache in values(pool.caches)
+        if !isnothing(cache.A_factor)
+            release_factor!(cache.solver, cache.A_factor)
+        end
         cache.A_factor = nothing
     end
 end
 
 """Clear eigen (shift-invert) factorization."""
 function clear_eigen_factors!(pool::SolverCachePool)
+    if !isnothing(pool.eigen_cache.A_factor)
+        release_factor!(pool.eigen_cache.solver, pool.eigen_cache.A_factor)
+    end
     pool.eigen_cache.A_factor = nothing
     pool.eigen_shift = nothing
 end
 
 """Empty the cache pool (remove all cached solvers)."""
 function Base.empty!(pool::SolverCachePool)
+    for cache in values(pool.caches)
+        if !isnothing(cache.A_factor)
+            release_factor!(cache.solver, cache.A_factor)
+            cache.A_factor = nothing
+        end
+        if !isnothing(cache.F_factor)
+            release_factor!(cache.solver, cache.F_factor)
+            cache.F_factor = nothing
+        end
+        if !isnothing(cache.E2_factor)
+            release_factor!(cache.solver, cache.E2_factor)
+            cache.E2_factor = nothing
+        end
+    end
+    if !isnothing(pool.filter_cache.F_factor)
+        release_factor!(pool.filter_cache.solver, pool.filter_cache.F_factor)
+        pool.filter_cache.F_factor = nothing
+    end
+    if !isnothing(pool.eigen_cache.A_factor)
+        release_factor!(pool.eigen_cache.solver, pool.eigen_cache.A_factor)
+        pool.eigen_cache.A_factor = nothing
+    end
+    pool.eigen_shift = nothing
     empty!(pool.caches)
 end

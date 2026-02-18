@@ -9,8 +9,7 @@ to the 3D FEM mesh via bilinear interpolation.
 - `x` — Grid x-coordinates (monotonic)
 - `y` — Grid y-coordinates (monotonic)
 - `params` — Design parameter matrix (nx × ny)
-- `nodes` — Mesh node coordinates for Jacobian computation
-- `jacobian` — Cached ∂(mesh node values)/∂(grid param) mapping
+- `nodes` — Mesh node coordinates for interpolation/adjoint mapping
 - `adj_idx` — Cached grid indices for adjoint scatter (4 × nnodes)
 - `adj_w` — Cached weights for adjoint scatter (4 × nnodes)
 - `adj_ready` — Whether adjoint cache is initialized
@@ -20,18 +19,15 @@ mutable struct FoundryGrid
     y::Vector{Float64}
     params::Matrix{Float64}
     nodes::Vector
-    jacobian::Matrix{Float64}
     adj_idx::Matrix{Int}
     adj_w::Matrix{Float64}
     adj_ready::Bool
 
     function FoundryGrid(x, y, params, nodes)
-        nx, ny = length(x), length(y)
         nnodes = length(nodes)
-        jacobian = zeros(Float64, nx * ny, nnodes)
         adj_idx = zeros(Int, 4, nnodes)
         adj_w = zeros(Float64, 4, nnodes)
-        new(x, y, params, nodes, jacobian, adj_idx, adj_w, false)
+        new(x, y, params, nodes, adj_idx, adj_w, false)
     end
 end
 
@@ -142,26 +138,17 @@ end
 pf_grid(r, grid::FoundryGrid) = pf_grid(r, grid.params, grid.x, grid.y)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Jacobian for adjoint
+# Adjoint scatter cache for bilinear interpolation
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    getjacobian!(grid::FoundryGrid) -> Matrix
+    getjacobian!(grid::FoundryGrid)
 
-Compute and cache the Jacobian mapping from grid parameters to mesh node values
-(Pf DOFs). Used for backpropagating gradients from mesh to grid.
+Dense global Jacobian storage was removed to avoid catastrophic memory usage.
+Use `apply_grid_adjoint!` for gradient backpropagation.
 """
 function getjacobian!(grid::FoundryGrid)
-    fill!(grid.jacobian, 0.0)
-    nx, ny = length(grid.x), length(grid.y)
-    tempjacobian = reshape(grid.jacobian, (nx, ny, size(grid.jacobian, 2)))
-
-    for (i, node) in enumerate(grid.nodes)
-        _update_jacobian_vertex!(i, node, 1.0, tempjacobian, grid.x, grid.y)
-    end
-
-    grid.jacobian[:, :] = reshape(tempjacobian, (nx * ny, size(grid.jacobian, 2)))[:, :]
-    return grid.jacobian
+    error("Dense FoundryGrid Jacobian was removed; use apply_grid_adjoint! instead.")
 end
 
 """
@@ -235,33 +222,4 @@ function apply_grid_adjoint!(out::Vector{Float64}, grid::FoundryGrid, node_grad:
     end
 
     return out
-end
-
-function _update_jacobian_vertex!(i, vertex, weight, tempjacobian, gridx, gridy)
-    x, y = vertex[1], vertex[2]
-
-    # Find bracketing indices
-    rx = searchsortedfirst(gridx, x)
-    ry = searchsortedfirst(gridy, y)
-
-    rx = clamp(rx, 2, length(gridx))
-    ry = clamp(ry, 2, length(gridy))
-    lx, ly = rx - 1, ry - 1
-
-    Δx_r = gridx[rx] - x
-    Δx_l = x - gridx[lx]
-    Δy_r = gridy[ry] - y
-    Δy_l = y - gridy[ly]
-
-    denom = (Δy_r + Δy_l) * (Δx_r + Δx_l)
-    if denom < 1e-12
-        tempjacobian[rx, ry, i] += weight
-        return
-    end
-
-    # Bilinear weights
-    tempjacobian[lx, ly, i] += weight * Δx_r * Δy_r / denom
-    tempjacobian[rx, ly, i] += weight * Δx_l * Δy_r / denom
-    tempjacobian[lx, ry, i] += weight * Δx_r * Δy_l / denom
-    tempjacobian[rx, ry, i] += weight * Δx_l * Δy_l / denom
 end

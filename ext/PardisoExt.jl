@@ -6,108 +6,155 @@ This file is only loaded when the user has Pardiso.jl installed.
 """
 module PardisoExt
 
-using DistributedEmitterOpt: AbstractSolver, PardisoSolver
-import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!
-using Pardiso
-using SparseArrays: SparseMatrixCSC
+import DistributedEmitterOpt
+import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!, release_factor!
+import Pardiso: MKLPardisoSolver, set_matrixtype!, pardisoinit, set_nprocs!, set_msglvl!,
+                set_iparm!, get_iparm, set_phase!, pardiso
+using SparseArrays: SparseMatrixCSC, spzeros, tril
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pardiso Factorization Wrapper
+# Pardiso factor wrapper
 # ═══════════════════════════════════════════════════════════════════════════════
 
-"""
-    PardisoFactor
-
-Wrapper holding Pardiso solver state and factorization.
-"""
 mutable struct PardisoFactor{T}
     ps::MKLPardisoSolver
-    A::SparseMatrixCSC{T}
+    A::SparseMatrixCSC{T,Int}
     mtype::Int
+    pattern_hash::UInt
+    released::Bool
 end
 
-function PardisoFactor(A::SparseMatrixCSC{T}, mtype::Int) where T
-    ps = MKLPardisoSolver()
+is_symmetric_mtype(mtype::Int) = mtype in (1, 2, -2, 3, 4, -4, 6)
 
-    # Set matrix type
-    set_matrixtype!(ps, mtype)
+function matrix_for_mtype(A::SparseMatrixCSC{T,Int}, mtype::Int) where T
+    is_symmetric_mtype(mtype) ? tril(A) : A
+end
 
-    # Initialize solver
-    pardisoinit(ps)
+function sparsity_hash(A::SparseMatrixCSC{T,Int}, mtype::Int) where T
+    h = hash(mtype, hash(size(A)))
+    h = hash(A.colptr, h)
+    hash(A.rowval, h)
+end
 
-    # Number of processors (use all available)
-    set_nprocs!(ps, Threads.nthreads())
+function apply_iparm!(ps::MKLPardisoSolver, iparm::Union{Nothing,Vector{Int}})
+    isnothing(iparm) && return
+    n = min(length(iparm), 64)
+    for i in 1:n
+        set_iparm!(ps, i, iparm[i])
+    end
+end
 
-    # Suppress output (set to 1 for debug)
-    set_msglvl!(ps, 0)
-
-    # Analysis + factorization (phases 11 + 22 = 12)
-    set_phase!(ps, 12)
-
-    # Dummy RHS for analysis/factor phase
+function run_phase!(ps::MKLPardisoSolver, phase::Int, A::SparseMatrixCSC{T,Int}) where T
+    set_phase!(ps, phase)
+    if phase == -1
+        x = Vector{T}()
+        b = Vector{T}()
+        pardiso(ps, x, A, b)
+        return nothing
+    end
     n = size(A, 1)
-    b = zeros(T, n)
     x = zeros(T, n)
-
+    b = zeros(T, n)
     pardiso(ps, x, A, b)
-
-    PardisoFactor{T}(ps, A, mtype)
+    return nothing
 end
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Interface Implementation
-# ═══════════════════════════════════════════════════════════════════════════════
-
-"""Factorize complex Maxwell matrix with Pardiso."""
-function lu!(solver::PardisoSolver, A::SparseMatrixCSC{ComplexF64})
-    PardisoFactor(A, solver.mtype)
+function release_pardiso!(factor::PardisoFactor)
+    factor.released && return nothing
+    try
+        run_phase!(factor.ps, -1, factor.A)
+    catch
+        # Best-effort release; keep GC fallback behavior if Pardiso release errors.
+    end
+    factor.A = spzeros(eltype(factor.A), 0, 0)
+    factor.released = true
+    return nothing
 end
 
-"""Factorize real filter matrix with Pardiso."""
-function filter_lu!(solver::PardisoSolver, A::SparseMatrixCSC{Float64})
-    # For real symmetric positive definite filter matrix, use mtype=2
-    # For real symmetric indefinite, use mtype=-2
-    # Default to symmetric indefinite for safety
-    PardisoFactor(A, -2)
+function new_pardiso_factor(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{T,Int}, mtype::Int) where T
+    Awork = matrix_for_mtype(A, mtype)
+    ps = MKLPardisoSolver()
+    set_matrixtype!(ps, mtype)
+    pardisoinit(ps)
+    set_nprocs!(ps, solver.nprocs)
+    set_msglvl!(ps, solver.msglvl)
+    apply_iparm!(ps, solver.iparm)
+
+    run_phase!(ps, 12, Awork) # analysis + numerical factorization
+
+    factor = PardisoFactor{T}(ps, Awork, mtype, sparsity_hash(Awork, mtype), false)
+    finalizer(release_pardiso!, factor)
+    return factor
 end
 
-"""Solve Ax = b using Pardiso factorization."""
-function solve!(::PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
-    # Solve phase (33)
-    set_phase!(factor.ps, 33)
+function refactor_pardiso!(solver::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T},
+    A::SparseMatrixCSC{T,Int}, mtype::Int) where T
+    Awork = matrix_for_mtype(A, mtype)
+    new_hash = sparsity_hash(Awork, mtype)
 
-    x = zeros(T, length(b))
-    pardiso(factor.ps, x, factor.A, b)
-    return x
-end
+    can_reuse_symbolic = solver.reuse_symbolic &&
+                         !factor.released &&
+                         factor.mtype == mtype &&
+                         factor.pattern_hash == new_hash
 
-"""Solve A'x = b (adjoint/transpose system)."""
-function solve_adjoint!(::PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
-    # Pardiso: iparm[12] controls transpose solve
-    #  0 = normal (A x = b)
-    #  1 = transpose (A^T x = b)
-    #  2 = conjugate transpose (A^H x = b) - for complex
-
-    # Save old value
-    old_iparm12 = get_iparm(factor.ps, 12)
-
-    # Set transpose mode
-    if T <: Complex
-        set_iparm!(factor.ps, 12, 2)  # Conjugate transpose
-    else
-        set_iparm!(factor.ps, 12, 1)  # Transpose
+    if can_reuse_symbolic
+        set_matrixtype!(factor.ps, mtype)
+        apply_iparm!(factor.ps, solver.iparm)
+        run_phase!(factor.ps, 22, Awork) # numerical only
+        factor.A = Awork
+        factor.pattern_hash = new_hash
+        factor.released = false
+        return factor
     end
 
-    # Solve phase
-    set_phase!(factor.ps, 33)
+    release_pardiso!(factor)
+    return new_pardiso_factor(solver, A, mtype)
+end
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Interface implementation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+function lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{ComplexF64,Int})
+    mtype = solver.assume_symmetric_maxwell ? solver.mtype_symmetric : solver.mtype
+    return new_pardiso_factor(solver, A, mtype)
+end
+
+function lu!(solver::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{ComplexF64}, A::SparseMatrixCSC{ComplexF64,Int})
+    mtype = solver.assume_symmetric_maxwell ? solver.mtype_symmetric : solver.mtype
+    return refactor_pardiso!(solver, factor, A, mtype)
+end
+
+function filter_lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{Float64,Int})
+    return new_pardiso_factor(solver, A, solver.filter_mtype)
+end
+
+function filter_lu!(solver::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{Float64}, A::SparseMatrixCSC{Float64,Int})
+    return refactor_pardiso!(solver, factor, A, solver.filter_mtype)
+end
+
+function solve!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
+    set_phase!(factor.ps, 33) # solve
     x = zeros(T, length(b))
     pardiso(factor.ps, x, factor.A, b)
-
-    # Restore
-    set_iparm!(factor.ps, 12, old_iparm12)
-
     return x
+end
+
+function solve_adjoint!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
+    old_iparm12 = get_iparm(factor.ps, 12)
+    try
+        set_iparm!(factor.ps, 12, T <: Complex ? 2 : 1) # A^H for complex, A^T for real
+        set_phase!(factor.ps, 33)
+        x = zeros(T, length(b))
+        pardiso(factor.ps, x, factor.A, b)
+        return x
+    finally
+        set_iparm!(factor.ps, 12, old_iparm12)
+    end
+end
+
+function release_factor!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor)
+    release_pardiso!(factor)
 end
 
 end # module
