@@ -74,16 +74,15 @@ function curl_op(grad_u)
 end
 
 """
-    shifted_curl_op(grad_u, u, k, θ)
+    shifted_curl_op(u, k, θ)
 
 Bloch-shifted curl used for oblique incidence:
   ∇ₛ = ∇ + i k sin(θ) êy
   ∇ₛ × u = ∇ × u + i k sin(θ) (êy × u)
 """
-function shifted_curl_op(grad_u, u, k::Real, θ::Real)
-    β = im * k * sind(θ)
-    ey_cross_u = VectorValue(u[3], 0 * u[2], -u[1])
-    return curl_op(grad_u) + β * ey_cross_u
+function shifted_curl_op(u, k::Real, θ::Real)
+    ∇ₛ = ∇ + im * k * sind(θ) * VectorValue(0.0, 1.0, 0.0)
+    return curl_op ∘ (∇ₛ(u))
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -125,7 +124,7 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
     A_mat = assemble_matrix(sim.U, sim.V) do u, v
         (
             # Shifted curl-curl term for oblique incidence (legacy ∇ₛ formulation)
-            ∫(shifted_curl_op(∇(v), v, k, phys.θ) ⋅ shifted_curl_op(∇(u), u, k, phys.θ))sim.dΩ -
+            ∫(shifted_curl_op(v, k, phys.θ) ⋅ shifted_curl_op(u, k, phys.θ))sim.dΩ -
             # Volume terms with background permittivity
             (k^2) * ∫(v ⋅ (ε₀ * u))sim.dΩ -
             # Design region permittivity
