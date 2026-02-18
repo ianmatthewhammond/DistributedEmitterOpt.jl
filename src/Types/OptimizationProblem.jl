@@ -297,10 +297,50 @@ function init_uniform!(prob::OptimizationProblem, value::Float64=0.5)
     return prob
 end
 
-"""Randomize design parameters."""
+"""
+Randomize design parameters using legacy initialization behavior.
+
+Legacy `rand` init used a filtered random field with fixed radius 20 nm:
+- Foundry mode: conic filter + sharp tanh projection (β=1028, η=0.5)
+- 3D mode: Helmholtz filter solve only
+"""
 function init_random!(prob::OptimizationProblem; seed=nothing)
     !isnothing(seed) && Random.seed!(seed)
-    prob.p .= rand(length(prob.p))
+    sim0 = default_sim(prob.sim)
+    p_rand = rand(length(prob.p))
+    legacy_R = (20.0, 20.0, 20.0)
+
+    if prob.foundry_mode
+        # Match legacy foundry initrandom: filtered random + near-binary projection.
+        ctrl = deepcopy(prob.control)
+        ctrl.use_filter = true
+        ctrl.R_filter = legacy_R
+        pf_vec = filter_grid(p_rand, sim0, ctrl)
+        prob.p .= tanh_projection.(pf_vec, 0.5, 1028.0)
+    else
+        # Match legacy 3D initrandom: Helmholtz-filtered random field.
+        ctrl = deepcopy(prob.control)
+        ctrl.use_filter = true
+        ctrl.R_filter = legacy_R
+        pool0 = default_pool(prob.pool)
+        cache = pool0.filter_cache
+        pf_vec = filter_helmholtz!(p_rand, cache, sim0, ctrl)
+        pf_field = FEFunction(sim0.Pf, pf_vec)
+        M = assemble_matrix(sim0.P, sim0.P) do u, v
+            ∫(v * u)sim0.dΩ
+        end
+        b = assemble_vector(sim0.P) do v
+            ∫(v * pf_field)sim0.dΩ
+        end
+        prob.p .= M \ b
+        prob.p .= clamp.(prob.p, 0.0, 1.0)
+
+        # Avoid stale filter factor when optimization uses a different filter radius.
+        if prob.control.R_filter != legacy_R && !isnothing(cache.F_factor)
+            release_factor!(cache.solver, cache.F_factor)
+            cache.F_factor = nothing
+        end
+    end
     return prob
 end
 
