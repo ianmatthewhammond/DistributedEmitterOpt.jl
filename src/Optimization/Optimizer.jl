@@ -36,7 +36,7 @@ Keyword arguments:
 - `max_iter` -- iterations per beta value (default 40)
 - `β_schedule` -- projection steepness values to sweep
 - `α_schedule` -- optional loss schedule (same length as beta_schedule)
-- `use_constraints` -- enable linewidth constraints
+- `use_constraints` -- enable linewidth constraints on the final beta epoch only
 - `tol` -- relative tolerance for convergence
 """
 function optimize!(prob::OptimizationProblem;
@@ -44,7 +44,7 @@ function optimize!(prob::OptimizationProblem;
     β_schedule::Vector{Float64}=[8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0],
     α_schedule::Union{Vector{Float64},Nothing}=nothing,
     use_constraints::Bool=false,
-    tol::Float64=1e-8,
+    tol::Float64=1e-15,
     empty_history::Bool=true)
 
     p_opt = copy(prob.p)
@@ -71,7 +71,8 @@ function optimize!(prob::OptimizationProblem;
             )
         end
 
-        g_opt, p_opt, _ = run_epoch!(prob, max_iter, use_constraints, tol; g_norm)
+        epoch_use_constraints = use_constraints && (epoch == length(β_schedule))
+        g_opt, p_opt, _ = run_epoch!(prob, max_iter, epoch_use_constraints, tol; g_norm)
 
         prob.p .= p_opt
         prob.g = g_opt
@@ -96,7 +97,7 @@ function optimize!(prob::EigenOptimizationProblem;
     max_iter::Int=40,
     β_schedule::Vector{Float64}=[8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0],
     use_constraints::Bool=false,
-    tol::Float64=1e-8)
+    tol::Float64=1e-15)
 
     p_opt = copy(prob.p)
     g_opt = 0.0
