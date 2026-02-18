@@ -7,6 +7,22 @@ NLopt-based optimization with beta-continuation scheduling (CCSAQ algorithm).
 import NLopt
 import NLopt: Opt, optimize
 
+"""
+    flat_substrate_norm(prob::OptimizationProblem) -> Float64
+
+Compute objective baseline at the flat-substrate design (`p = 0`), matching
+legacy normalization behavior (`g / g_base`).
+"""
+function flat_substrate_norm(prob::OptimizationProblem)
+    p_flat = zeros(Float64, length(prob.p))
+    g_norm = objective_and_gradient!(Float64[], p_flat, prob)
+    if !isfinite(g_norm) || g_norm <= 0.0
+        @warn "Flat-substrate normalization baseline is invalid; falling back to 1.0" g_norm
+        return 1.0
+    end
+    return g_norm
+end
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -33,6 +49,8 @@ function optimize!(prob::OptimizationProblem;
 
     p_opt = copy(prob.p)
     g_opt = 0.0
+    g_norm = flat_substrate_norm(prob)
+    @info "Flat-substrate normalization baseline: g_norm = $g_norm"
 
     # Initialize history
     if empty_history
@@ -53,7 +71,7 @@ function optimize!(prob::OptimizationProblem;
             )
         end
 
-        g_opt, p_opt, _ = run_epoch!(prob, max_iter, use_constraints, tol)
+        g_opt, p_opt, _ = run_epoch!(prob, max_iter, use_constraints, tol; g_norm)
 
         prob.p .= p_opt
         prob.g = g_opt
@@ -104,7 +122,8 @@ end
 # ---------------------------------------------------------------------------
 
 """Run one epoch of optimization at fixed beta."""
-function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64)
+function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
+    g_norm::Float64=1.0)
     np = length(prob.p)
     ret_grad = zeros(Float64, np)
 
@@ -115,8 +134,20 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     opt.maxeval = max_iter
 
     opt.max_objective = function (p, grad)
-        g = objective_and_gradient!(grad, p, prob)
+        g_raw = objective_and_gradient!(grad, p, prob)
+        g = g_raw / g_norm
+        grad ./= g_norm
         ret_grad .= grad
+
+        # Keep cached state consistent with returned normalized objective/gradient.
+        prob.g = g
+        if !isempty(prob.∇g)
+            prob.∇g .= grad
+        end
+
+        @show g
+        flush(stdout)
+        Libc.flush_cstdio()
 
         next_iteration!(prob)
         log_iteration!(prob, g, p)
