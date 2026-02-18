@@ -44,7 +44,7 @@ function assemble_eigen_matrices(pt, sim, phys::EigenPhysicalParams)
     k = 1.0
 
     K = assemble_matrix(sim.U, sim.V) do u, v
-        ∫(shifted_curl_op(∇(v), v, k, phys.θ) ⋅ shifted_curl_op(∇(u), u, k, phys.θ))sim.dΩ
+        ∫(shifted_curl_op(v, k, phys.θ) ⋅ shifted_curl_op(u, k, phys.θ))sim.dΩ
     end
     C = assemble_matrix(sim.U, sim.V) do u, v
         im * cosd(phys.θ) * ∫(v ⋅ (u * √ε₀))sim.dS_top +
