@@ -4,23 +4,23 @@
 Physical environment: material properties for the simulation domain.
 Materials can be specified as:
 - String: lookup from data files (e.g., "Ag", "Au")
-- Float64: direct refractive index (e.g., 1.33 for water)
+- Float64: direct refractive index (default √1.77 for water-like medium)
 """
 
 const MaterialSpec = Union{String,Float64}
 
 """
-    Environment(; mat_design, mat_substrate=mat_design, mat_fluid=1.33)
+    Environment(; mat_design, mat_substrate=mat_design, mat_fluid=sqrt(1.77))
 
 ## Fields
 - `mat_design` — Design region material (typically metal)
 - `mat_substrate` — Substrate material (defaults to mat_design)
-- `mat_fluid` — Fluid/background material (default 1.33 for water)
+- `mat_fluid` — Fluid/background material (default √1.77)
 """
 Base.@kwdef struct Environment
     mat_design::MaterialSpec
     mat_substrate::MaterialSpec = mat_design
-    mat_fluid::MaterialSpec = 1.33
+    mat_fluid::MaterialSpec = sqrt(1.77)
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════

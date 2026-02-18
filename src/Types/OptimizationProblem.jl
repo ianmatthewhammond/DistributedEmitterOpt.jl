@@ -237,7 +237,7 @@ function OptimizationProblem(
     θ::Float64=0.0,
     pol::Symbol=:y,
     mat_design::MaterialSpec="Ag",
-    mat_fluid::MaterialSpec=1.33,
+    mat_fluid::MaterialSpec=sqrt(1.77),
     αₚ::Matrix{ComplexF64}=Matrix{ComplexF64}(LinearAlgebra.I, 3, 3),
     kwargs...
 )

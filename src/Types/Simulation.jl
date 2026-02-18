@@ -71,7 +71,7 @@ Build Simulation from mesh file.
 ## Arguments
 - `meshfile` — Path to .msh file
 - `order` — Nédélec element order (default 0)
-- `degree` — Quadrature degree (default 4)
+- `degree` — Quadrature degree (default 6)
 - `dir_x`, `dir_y` — Dirichlet boundaries for PEC symmetry
 - `source_y` — Source polarization (true=y, false=x)
 - `foundry_mode` — Use 2D DOF grid
@@ -79,7 +79,7 @@ Build Simulation from mesh file.
 """
 function build_simulation(meshfile::String;
     order::Int=0,
-    degree::Int=4,
+    degree::Int=6,
     dir_x::Bool=false,
     dir_y::Bool=true,
     source_y::Bool=true,
