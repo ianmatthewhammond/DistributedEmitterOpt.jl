@@ -98,12 +98,13 @@ struct PhysicalParams
     ω::Float64               # Angular frequency (= 2π/λ)
     θ::Float64               # Incidence angle (degrees)
     nf::ComplexF64           # Fluid index
-    nm::ComplexF64           # Metal index  
+    nm::ComplexF64           # Metal index
     ns::ComplexF64           # Substrate index
     μ::Float64               # Permeability (= 1.0)
     des_low::Float64         # z-coord of design region bottom
     des_high::Float64        # z-coord of design region top
     α::Float64               # Artificial absorption
+    bot_PEC::Boolean = false        # bottom PEC or not
 end
 
 """
@@ -121,6 +122,8 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
     sqrt_ε₀ = sqrt ∘ ε₀
     εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
 
+    bot_PEC = phys.bot_PEC ? 0.0 : 1.0
+
     A_mat = assemble_matrix(sim.U, sim.V) do u, v
         (
             # Shifted curl-curl term for oblique incidence (legacy ∇ₛ formulation)
@@ -131,7 +134,7 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
             (k^2) * ∫(v ⋅ (εₘ * u))sim.dΩ_design +
             # Sommerfeld ABC (top and bottom)
             +im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_top +
-            +im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
+            + bot_PEC * 1im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
         )
     end
 

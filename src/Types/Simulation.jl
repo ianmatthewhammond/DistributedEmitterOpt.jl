@@ -85,7 +85,8 @@ function build_simulation(meshfile::String;
     source_y::Bool=true,
     foundry_mode::Bool=true,
     sizes=nothing,
-    model=nothing)
+    model=nothing,
+    bot_PEC::Bool=false)
 
     sim = Simulation()
 
@@ -101,6 +102,7 @@ function build_simulation(meshfile::String;
     dirichlet_tags = String[]
     dir_x && push!(dirichlet_tags, "FacesX")
     dir_y && push!(dirichlet_tags, "FacesY")
+    bot_PEC && push!(dirichlet_tags, "BottomZ")
 
     # Nédélec space for E-field
     reffe = ReferenceFE(nedelec, Float64, order)

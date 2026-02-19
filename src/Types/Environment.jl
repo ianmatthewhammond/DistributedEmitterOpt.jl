@@ -21,6 +21,7 @@ Base.@kwdef struct Environment
     mat_design::MaterialSpec
     mat_substrate::MaterialSpec = mat_design
     mat_fluid::MaterialSpec = sqrt(1.77)
+    bot_PEC::Bool = false
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
