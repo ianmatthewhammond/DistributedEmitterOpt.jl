@@ -111,7 +111,8 @@ function build_simulation_bundle(meshfile::String;
     foundry_mode::Bool=false,
     order::Int=0,
     degree::Int=4,
-    sizes=nothing)
+    sizes=nothing,
+    bot_PEC::Bool=false)
 
     model = GmshDiscreteModel(meshfile)
     model = repair_gmsh_model(meshfile, model)
@@ -123,7 +124,8 @@ function build_simulation_bundle(meshfile::String;
         source_y=true,
         foundry_mode,
         sizes,
-        model)
+        model,
+        bot_PEC=bot_PEC)
 
     sim_x = build_simulation(meshfile;
         order, degree,
@@ -132,7 +134,8 @@ function build_simulation_bundle(meshfile::String;
         source_y=false,
         foundry_mode,
         sizes,
-        model)
+        model,
+        bot_PEC=bot_PEC)
 
     by_pol = Dict{Symbol,Simulation}(:y => sim_y, :x => sim_x)
     SimulationBundle(sim_y, by_pol)
