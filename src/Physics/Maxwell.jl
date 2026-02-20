@@ -104,7 +104,7 @@ struct PhysicalParams
     des_low::Float64         # z-coord of design region bottom
     des_high::Float64        # z-coord of design region top
     α::Float64               # Artificial absorption
-    bot_PEC::Boolean = false        # bottom PEC or not
+    bot_PEC::Bool        # bottom PEC or not
 end
 
 """
