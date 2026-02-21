@@ -1,6 +1,6 @@
 using DistributedEmitterOpt
-using DistributedEmitterOpt.Visualization
 using PyCall, PyPlot, CairoMakie, LaTeXStrings
+const Viz = Base.get_extension(DistributedEmitterOpt, :VisualizationExt); using .Viz
 # using Gridap, GridapGmsh, GridapMakie # Unused for plotting results
 using CSV, DataFrames
 using Images, JLD2, Random

@@ -16,6 +16,7 @@ using SparseArrays
 using Random
 using Statistics: mean
 using KrylovKit
+using Zygote
 
 using Gridap
 using Gridap: Triangulation, Measure, FESpace, FEFunction
@@ -100,11 +101,8 @@ include("Optimization/GradientCoordinator.jl")
 include("Optimization/GradientCoordinatorEigen.jl")
 
 # ---------------------------------------------------------------------------
-# Visualization
+# Analysis
 # ---------------------------------------------------------------------------
-
-include("Visualization/Visualization.jl")
-using .Visualization
 
 include("Analysis/Analysis.jl")
 using .Analysis
@@ -166,12 +164,6 @@ export genmesh
 # Optimization
 export optimize!, objective_and_gradient!
 export evaluate, test_gradient
-
-# Visualization
-export vperiodicdesign, visualize, visualizepost, visualize_new
-export plot_material, plot_field, plot_substrate, get_figure_data
-export combine_figures, add_text!, load_bid_parameters
-export plot_directionals, plot_geometrics, plot_geometrics_one_only, plot_tolerance
 
 # Analysis
 export Analysis

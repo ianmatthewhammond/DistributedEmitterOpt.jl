@@ -1,6 +1,6 @@
 using DistributedEmitterOpt
-using DistributedEmitterOpt.Visualization
 using PyCall, CairoMakie
+const Viz = Base.get_extension(DistributedEmitterOpt, :VisualizationExt); using .Viz
 # using Gridap, GridapGmsh, GridapMakie # Gridap/Gmsh not directly needed for plotting pre-generated data
 using CSV, DataFrames
 using Images, JLD2, Random
