@@ -79,6 +79,11 @@ function optimize!(prob::OptimizationProblem;
 
     for (epoch, β) in enumerate(β_schedule)
         @info "Epoch $epoch: β = $β"
+        @show Sys.total_memory() / 2^20
+        @show Sys.free_memory() / 2^20
+        @show sizeof(prob) * 1e-6
+        flush(stdout)
+        Libc.flush_cstdio()
 
         prob.control.β = β
 
@@ -99,6 +104,11 @@ function optimize!(prob::OptimizationProblem;
         prob.g = g_opt
 
         @info "  Epoch $epoch done: g = $g_opt"
+        @show Sys.total_memory() / 2^20
+        @show Sys.free_memory() / 2^20
+        @show sizeof(prob) * 1e-6
+        flush(stdout)
+        Libc.flush_cstdio()
     end
 
     if backup
@@ -163,7 +173,15 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     opt.maxeval = max_iter
 
     opt.max_objective = function (p, grad)
+        free_mem_before = Sys.free_memory() / 2^20
+        @show free_mem_before
+        @show sizeof(prob) * 1e-6
+        flush(stdout)
+        Libc.flush_cstdio()
+
         g_raw = objective_and_gradient!(grad, p, prob)
+        free_mem_after = Sys.free_memory() / 2^20
+        @show free_mem_after
         g = g_raw / g_norm
         grad ./= g_norm
         ret_grad .= grad
