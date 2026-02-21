@@ -2,8 +2,8 @@
 # This script generates the Figure 1 overview plot using pre-computed data.
 
 using DistributedEmitterOpt
-using DistributedEmitterOpt.Visualization
 using PyCall
+const Viz = Base.get_extension(DistributedEmitterOpt, :VisualizationExt); using .Viz
 using PyPlot
 using CairoMakie
 using JLD2

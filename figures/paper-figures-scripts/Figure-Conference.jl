@@ -1,6 +1,6 @@
 using DistributedEmitterOpt
-using DistributedEmitterOpt.Visualization
 using PyCall, CairoMakie
+const Viz = Base.get_extension(DistributedEmitterOpt, :VisualizationExt); using .Viz
 using Images, FileIO, Colors, ColorSchemes, JLD2
 
 # # Activate CairoMakie for high-quality vector output
