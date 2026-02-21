@@ -6,6 +6,7 @@ NLopt-based optimization with beta-continuation scheduling (CCSAQ algorithm).
 
 import NLopt
 import NLopt: Opt, optimize
+import JLD2
 
 """
     flat_substrate_norm(prob::OptimizationProblem) -> Float64
@@ -38,6 +39,10 @@ Keyword arguments:
 - `α_schedule` -- optional loss schedule (same length as beta_schedule)
 - `use_constraints` -- enable linewidth constraints on the final beta epoch only
 - `tol` -- relative tolerance for convergence
+- `backup` -- enable autosaving `(p, g_history)` checkpoints
+- `backup_every` -- autosave interval (iterations)
+- `backup_path` -- optional checkpoint path (default `joinpath(prob.root, "results_backup.jld2")`)
+- `resume_from` -- optional checkpoint path to resume from
 """
 function optimize!(prob::OptimizationProblem;
     max_iter::Int=40,
@@ -45,16 +50,31 @@ function optimize!(prob::OptimizationProblem;
     α_schedule::Union{Vector{Float64},Nothing}=nothing,
     use_constraints::Bool=false,
     tol::Float64=1e-15,
-    empty_history::Bool=true)
+    empty_history::Bool=true,
+    backup::Bool=false,
+    backup_every::Int=20,
+    backup_path::Union{Nothing,String}=nothing,
+    resume_from::Union{Nothing,String}=nothing)
 
     p_opt = copy(prob.p)
     g_opt = 0.0
+    ckpt_path = isnothing(backup_path) ? joinpath(prob.root, "results_backup.jld2") : backup_path
+
+    if !isnothing(resume_from)
+        resume_from_checkpoint!(prob, resume_from)
+        p_opt .= prob.p
+        g_opt = prob.g
+    end
+
     g_norm = flat_substrate_norm(prob)
     @info "Flat-substrate normalization baseline: g_norm = $g_norm"
 
     # Initialize history
-    if empty_history
+    if empty_history && isnothing(resume_from)
         empty!(prob.g_history)
+        prob.iteration = 0
+    elseif empty_history && !isnothing(resume_from)
+        @info "resume_from provided: preserving loaded g_history"
     end
 
     for (epoch, β) in enumerate(β_schedule)
@@ -72,12 +92,17 @@ function optimize!(prob::OptimizationProblem;
         end
 
         epoch_use_constraints = use_constraints && (epoch == length(β_schedule))
-        g_opt, p_opt, _ = run_epoch!(prob, max_iter, epoch_use_constraints, tol; g_norm)
+        g_opt, p_opt, _ = run_epoch!(prob, max_iter, epoch_use_constraints, tol;
+            g_norm, backup, backup_every, backup_path=ckpt_path)
 
         prob.p .= p_opt
         prob.g = g_opt
 
         @info "  Epoch $epoch done: g = $g_opt"
+    end
+
+    if backup
+        save_checkpoint(prob, ckpt_path)
     end
 
     return g_opt, p_opt
@@ -124,7 +149,10 @@ end
 
 """Run one epoch of optimization at fixed beta."""
 function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
-    g_norm::Float64=1.0)
+    g_norm::Float64=1.0,
+    backup::Bool=false,
+    backup_every::Int=20,
+    backup_path::Union{Nothing,String}=nothing)
     np = length(prob.p)
     ret_grad = zeros(Float64, np)
 
@@ -151,7 +179,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
         Libc.flush_cstdio()
 
         next_iteration!(prob)
-        log_iteration!(prob, g, p)
+        log_iteration!(prob, g, p; backup, backup_every, backup_path)
 
         return g
     end
@@ -222,7 +250,10 @@ function init_history!(prob::OptimizationProblem)
 end
 
 """Log iteration to console and optionally save checkpoint."""
-function log_iteration!(prob::OptimizationProblem, g, p)
+function log_iteration!(prob::OptimizationProblem, g, p;
+    backup::Bool=false,
+    backup_every::Int=20,
+    backup_path::Union{Nothing,String}=nothing)
     iter = prob.iteration
 
     # Store history
@@ -232,25 +263,42 @@ function log_iteration!(prob::OptimizationProblem, g, p)
         @info "Iter $iter: g = $(round(g, sigdigits=4))"
     end
 
-    if iter % 20 == 0
-        save_checkpoint(prob, "iter_$(iter)")
+    if backup && backup_every > 0 && (iter % backup_every == 0)
+        path = isnothing(backup_path) ? joinpath(prob.root, "results_backup.jld2") : backup_path
+        save_checkpoint(prob, path)
     end
 end
 
 """Save optimization checkpoint."""
-function save_checkpoint(prob::OptimizationProblem, name::String)
-    filepath = joinpath(prob.root, "$(name).jld2")
-
+function save_checkpoint(prob::OptimizationProblem, filepath::String)
     mkpath(prob.root)
+    JLD2.save(filepath, Dict(
+        "p" => copy(prob.p),
+        "g_history" => copy(prob.g_history)
+    ))
+end
 
-    data = Dict(
-        "p" => prob.p,
-        "g" => prob.g,
-        "iteration" => prob.iteration,
-        "β" => prob.control.β
-    )
+"""Resume optimization state from a checkpoint containing `(p, g_history)`."""
+function resume_from_checkpoint!(prob::OptimizationProblem, filepath::String)
+    if !isfile(filepath)
+        throw(ArgumentError("Checkpoint file not found: $filepath"))
+    end
 
-    # JLD2.save(filepath, data)
+    data = JLD2.load(filepath)
+    if !haskey(data, "p") || !haskey(data, "g_history")
+        throw(ArgumentError("Checkpoint must contain keys 'p' and 'g_history': $filepath"))
+    end
+
+    p_loaded = vec(data["p"])
+    if length(p_loaded) != length(prob.p)
+        throw(ArgumentError("Checkpoint p length $(length(p_loaded)) != problem DOFs $(length(prob.p))"))
+    end
+
+    prob.p .= p_loaded
+    prob.g_history = Float64.(vec(data["g_history"]))
+    prob.iteration = length(prob.g_history)
+    prob.g = isempty(prob.g_history) ? 0.0 : prob.g_history[end]
+    return prob
 end
 
 # ---------------------------------------------------------------------------
