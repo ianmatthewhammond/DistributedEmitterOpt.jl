@@ -36,6 +36,7 @@ Base.@kwdef mutable struct Control
     # ═══ SSP ═══
     use_ssp::Bool = false
     R_ssp::Float64 = 0.55 * R_filter[1]
+    foundry_projection_mode::Symbol = :current
 
     # ═══ Linewidth Constraints ═══
     use_constraints::Bool = false
@@ -111,5 +112,6 @@ function validate(c::Control)
     @assert c.β > 0 "Projection steepness β must be positive"
     @assert 0 < c.η < 1 "Threshold η must be in (0, 1)"
     @assert 0 < c.η_dilation < c.η < c.η_erosion < 1 "Must have η_dilation < η < η_erosion"
+    @assert c.foundry_projection_mode in (:current, :legacy) "foundry_projection_mode must be :current or :legacy"
     return true
 end
