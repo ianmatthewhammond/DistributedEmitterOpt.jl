@@ -46,14 +46,17 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     # Filter on grid
     pf_vec = filter_grid(p, sim0, control)
 
-    # Interpolate filtered grid onto FEM mesh
-    nx, ny = length(sim0.grid.x), length(sim0.grid.y)
-    sim0.grid.params[:, :] = reshape(pf_vec, (nx, ny))
-    pf_vals = [pf_grid(node, sim0.grid) for node in sim0.grid.nodes]
-    pf = FEFunction(sim0.Pf, pf_vals)
-
-    # SSP projection
-    pt = project_ssp(pf, control)
+    local pt
+    local ∂g_∂pf_vec
+    if control.foundry_projection_mode == :legacy
+        # Legacy foundry flow: apply SSP on 2D grid first, then interpolate pt to FEM.
+        pt_vec = smoothed_projection_vec(pf_vec, control, sim0)
+        pt = build_foundry_pf(pt_vec, sim0, control)
+    else
+        # Current flow: interpolate pf to FEM first, then apply FEM SSP.
+        pf = build_foundry_pf(pf_vec, sim0, control)
+        pt = project_ssp(pf, control)
+    end
 
     # Forward Maxwell solves
     fields = solve_forward!(pde, pt, sim, pool)
@@ -65,27 +68,40 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     sources = compute_adjoint_sources(objective, pde, fields, pt, sim)
     adjoints = solve_adjoint!(pde, sources, sim, pool)
 
-    # PDE sensitivity (dA/dpf from adjoint fields)
-    ∂g_∂pf_pde = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim0.Pf)
-    if any(isnan, ∂g_∂pf_pde)
-        println("WARNING: NaNs in PDE sensitivity")
+    if control.foundry_projection_mode == :legacy
+        # Legacy foundry sensitivity is accumulated directly to 2D grid pt DOFs.
+        ∂g_∂pt_grid = zeros(Float64, length(p))
+        pde_sensitivity_pt_grid!(∂g_∂pt_grid, pde, fields, adjoints, pt, sim)
+        ∂g_∂pt_explicit = zeros(Float64, length(p))
+        explicit_sensitivity_pt_grid!(∂g_∂pt_explicit, objective, pde, fields, pt, sim)
+        ∂g_∂pt_grid .+= ∂g_∂pt_explicit
+
+        # Chain through legacy grid SSP: pt_vec = SSP_grid(pf_vec).
+        ∂g_∂pf_vec = smoothed_projection_adjoint(∂g_∂pt_grid, pf_vec, control, sim0)
+    else
+        # PDE sensitivity (dA/dpf from adjoint fields)
+        ∂g_∂pf_pde = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim0.Pf)
+        if any(isnan, ∂g_∂pf_pde)
+            println("WARNING: NaNs in PDE sensitivity")
+        end
+
+        # Explicit sensitivity (dg/dpf, not through the PDE)
+        ∂g_∂pf_explicit = explicit_sensitivity(objective, pde, fields, pf, pt, sim, control; space=sim0.Pf)
+        if any(isnan, ∂g_∂pf_explicit)
+            println("WARNING: NaNs in explicit sensitivity")
+        end
+
+        # Total sensitivity on mesh
+        ∂g_∂pf_vec = ∂g_∂pf_pde .+ ∂g_∂pf_explicit
+
+        # Map mesh sensitivities back to grid
+        ∂g_∂pf_grid = similar(p)
+        map_foundry_adjoint!(∂g_∂pf_grid, sim0, control, ∂g_∂pf_vec)
+        ∂g_∂pf_vec = ∂g_∂pf_grid
     end
-
-    # Explicit sensitivity (dg/dpf, not through the PDE)
-    ∂g_∂pf_explicit = explicit_sensitivity(objective, pde, fields, pf, pt, sim, control; space=sim0.Pf)
-    if any(isnan, ∂g_∂pf_explicit)
-        println("WARNING: NaNs in explicit sensitivity")
-    end
-
-    # Total sensitivity on mesh
-    ∂g_∂pf_vec = ∂g_∂pf_pde .+ ∂g_∂pf_explicit
-
-    # Map mesh sensitivities back to grid
-    ∂g_∂pf_grid = similar(p)
-    apply_grid_adjoint!(∂g_∂pf_grid, sim0.grid, ∂g_∂pf_vec)
 
     # Chain through filter adjoint
-    ∂g_∂p = filter_grid_adjoint(∂g_∂pf_grid, sim0, control)
+    ∂g_∂p = filter_grid_adjoint(∂g_∂pf_vec, sim0, control)
 
     if !isempty(∇g)
         ∇g .= ∂g_∂p

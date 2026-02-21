@@ -131,6 +131,72 @@ function pde_sensitivity(pde::MaxwellProblem,
     return ∂g_∂pf
 end
 
+"""
+    pde_sensitivity_pt(pde, fields, adjoints, pt, sim; space=sim.Pf)
+
+Compute dg/dpt from the PDE term (lambda^T dA/dpt E), summed over all configs.
+Used by legacy foundry smoothing mode where SSP lives on the 2D grid.
+"""
+function pde_sensitivity_pt(pde::MaxwellProblem,
+    fields::Dict{CacheKey,CellField},
+    adjoints::Dict{CacheKey,CellField},
+    pt, sim;
+    space=default_sim(sim).Pf)
+
+    ∂g_∂pt = zeros(Float64, num_free_dofs(space))
+    sim_base = default_sim(sim)
+
+    for fc in all_configs(pde)
+        key = cache_key(fc)
+        if !haskey(fields, key) || !haskey(adjoints, key)
+            continue
+        end
+
+        sim_fc = sim_for(sim, fc)
+        E = fields[key]
+        λ = adjoints[key]
+        pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
+        phys = build_phys_params(fc, pde.env, sim_fc; α=pde.α_loss)
+
+        ∂g_∂pt .+= assemble_material_sensitivity_pt(E, λ, pt_fc, sim_fc, phys; space)
+    end
+
+    return ∂g_∂pt
+end
+
+"""
+    pde_sensitivity_pt_grid!(out, pde, fields, adjoints, pt, sim)
+
+Legacy foundry accumulation of dg/dpt directly onto 2D grid DOFs via quadrature.
+"""
+function pde_sensitivity_pt_grid!(out::Vector{Float64},
+    pde::MaxwellProblem,
+    fields::Dict{CacheKey,CellField},
+    adjoints::Dict{CacheKey,CellField},
+    pt, sim)
+
+    fill!(out, 0.0)
+    sim_base = default_sim(sim)
+
+    for fc in all_configs(pde)
+        key = cache_key(fc)
+        if !haskey(fields, key) || !haskey(adjoints, key)
+            continue
+        end
+
+        sim_fc = sim_for(sim, fc)
+        E = fields[key]
+        λ = adjoints[key]
+        pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
+        phys = build_phys_params(fc, pde.env, sim_fc; α=pde.α_loss)
+        ∂εε = p -> ∂ε_∂p(p, phys)
+        density = real((phys.ω^2) * ((∂εε ∘ pt_fc) * (conj(λ) ⋅ E)))
+        accumulate_density_to_grid!(out, sim_base.grid, sim_fc.dΩ_design, density)
+    end
+
+    return out
+end
+
 # ---------------------------------------------------------------------------
 # Cache invalidation
 # ---------------------------------------------------------------------------

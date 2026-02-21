@@ -273,3 +273,124 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
 
     return ∂g_∂pf
 end
+
+"""
+    explicit_sensitivity_pt(obj, pde, fields, pt, sim; space=sim.Pf) -> Vector
+
+Explicit objective sensitivity with respect to projected design `pt`.
+Used by legacy foundry smoothing mode where SSP is applied on the 2D grid.
+"""
+function explicit_sensitivity_pt(obj::SERSObjective, pde::MaxwellProblem, fields::Dict, pt, sim; space=default_sim(sim).Pf)
+    if !obj.volume && !obj.surface
+        return zeros(Float64, num_free_dofs(space))
+    end
+
+    inputs = pde.inputs
+    outputs = effective_outputs(pde)
+
+    ∂g_∂pt = zeros(Float64, num_free_dofs(space))
+    sim_base = default_sim(sim)
+
+    for fc_in in inputs
+        key_in = cache_key(fc_in)
+        haskey(fields, key_in) || continue
+        sim_in = sim_for(sim, fc_in)
+        Ep = fields[key_in]
+
+        for fc_out in outputs
+            key_out = cache_key(fc_out)
+            haskey(fields, key_out) || continue
+            sim_out = sim_for(sim, fc_out)
+            Ee = fields[key_out]
+
+            weight = fc_in.weight * fc_out.weight
+            Ee_conj = Ee'
+
+            Ep_out = sim_out === sim_in ? Ep : map_field(Ep, sim_out, :U)
+            dmg = if obj.use_damage_model
+                (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep_out)
+            else
+                1.0
+            end
+            pt_out = sim_out === sim_base ? pt : map_pt(pt, sim_out)
+            αc1_out, αc2_out = α_cellfields(obj.αₚ, sim_out.Ω)
+
+            integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep_out, Ep_out, αc1_out, αc2_out)
+
+            contrib = assemble_vector(sim_out.Pf) do v
+                term = 0.0
+                if obj.volume
+                    term += dmg * (-real(integrand))
+                end
+                if obj.surface
+                    term += dmg * real(integrand - 2 * integrand * pt_out)
+                end
+                ∫(v * term)sim_out.dΩ_design
+            end
+
+            ∂g_∂pt .+= weight .* contrib
+        end
+    end
+
+    return ∂g_∂pt
+end
+
+"""
+    explicit_sensitivity_pt_grid!(out, obj, pde, fields, pt, sim)
+
+Legacy foundry accumulation of explicit dg/dpt directly onto 2D grid DOFs.
+"""
+function explicit_sensitivity_pt_grid!(out::Vector{Float64},
+    obj::SERSObjective,
+    pde::MaxwellProblem,
+    fields::Dict,
+    pt, sim)
+
+    fill!(out, 0.0)
+    if !obj.volume && !obj.surface
+        return out
+    end
+
+    inputs = pde.inputs
+    outputs = effective_outputs(pde)
+    sim_base = default_sim(sim)
+
+    for fc_in in inputs
+        key_in = cache_key(fc_in)
+        haskey(fields, key_in) || continue
+        sim_in = sim_for(sim, fc_in)
+        Ep = fields[key_in]
+
+        for fc_out in outputs
+            key_out = cache_key(fc_out)
+            haskey(fields, key_out) || continue
+            sim_out = sim_for(sim, fc_out)
+            Ee = fields[key_out]
+
+            weight = fc_in.weight * fc_out.weight
+            Ee_conj = Ee'
+            Ep_out = sim_out === sim_in ? Ep : map_field(Ep, sim_out, :U)
+            dmg = if obj.use_damage_model
+                (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep_out)
+            else
+                1.0
+            end
+            pt_out = sim_out === sim_base ? pt : map_pt(pt, sim_out)
+            αc1_out, αc2_out = α_cellfields(obj.αₚ, sim_out.Ω)
+            integrand = α̂ₚ² ∘ (Ee, Ee_conj, Ep_out, Ep_out, αc1_out, αc2_out)
+
+            term = 0.0
+            if obj.volume
+                term += dmg * (-real(integrand))
+            end
+            if obj.surface
+                term += dmg * real(integrand - 2 * integrand * pt_out)
+            end
+
+            density = weight * term
+            accumulate_density_to_grid!(out, sim_base.grid, sim_out.dΩ_design, density)
+        end
+    end
+
+    return out
+end
