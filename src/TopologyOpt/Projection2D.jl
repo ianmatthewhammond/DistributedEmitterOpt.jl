@@ -98,6 +98,28 @@ function smoothed_projection(pf::AbstractMatrix{Float64}, control, sim)
     smoothed_projection(pf, control.η, control.β, sim.grid.x, sim.grid.y)
 end
 
+"""
+    smoothed_projection_vec(pf_vec, control, sim) -> Vector
+
+Vector wrapper around 2D grid SSP used by legacy foundry mode.
+"""
+function smoothed_projection_vec(pf_vec::Vector{Float64}, control, sim)
+    nx, ny = length(sim.grid.x), length(sim.grid.y)
+    pf = reshape(pf_vec, (nx, ny))
+    return vec(smoothed_projection(pf, control, sim))
+end
+
+"""
+    smoothed_projection_adjoint(∂g_∂pt_vec, pf_vec, control, sim) -> Vector
+
+Apply Jacobian-transpose of legacy grid SSP using reverse-mode pullback.
+"""
+function smoothed_projection_adjoint(∂g_∂pt_vec::Vector{Float64},
+    pf_vec::Vector{Float64}, control, sim)
+    _, back = Zygote.pullback(x -> smoothed_projection_vec(x, control, sim), pf_vec)
+    return back(∂g_∂pt_vec)[1]
+end
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main interface
 # ═══════════════════════════════════════════════════════════════════════════════
