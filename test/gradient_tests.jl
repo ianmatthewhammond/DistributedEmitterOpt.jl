@@ -66,6 +66,7 @@ function build_test_problem(;
     flag_surface::Bool=false,
     use_damage::Bool=false,
     isotropic::Bool=true,
+    θ::Float64=0.0,
     λ::Float64=532.0,
     λ_pump::Float64=λ,
     λ_emission::Float64=λ,
@@ -119,18 +120,18 @@ function build_test_problem(;
     )
 
     # IO Configuration
-    inputs = [FieldConfig(λ_pump; θ=0.0, pol=:y)] # Pump Y (consistent with symmetry)
+    inputs = [FieldConfig(λ_pump; θ=θ, pol=:y)] # Pump Y (consistent with symmetry)
 
     outputs = if complex_config
         # Mixed polarization and weights
         [
-            FieldConfig(λ_emission; θ=0.0, pol=:y, weight=1.0),
-            FieldConfig(λ_emission + 10.0; θ=0.0, pol=:x, weight=0.5)
+            FieldConfig(λ_emission; θ=θ, pol=:y, weight=1.0),
+            FieldConfig(λ_emission + 10.0; θ=θ, pol=:x, weight=0.5)
         ]
     elseif λ_emission == λ_pump
         FieldConfig[] # Elastic
     else
-        [FieldConfig(λ_emission; θ=0.0, pol=:y)] # Inelastic Y
+        [FieldConfig(λ_emission; θ=θ, pol=:y)] # Inelastic Y
     end
 
     pde = MaxwellProblem(env=env, inputs=inputs, outputs=outputs)
@@ -202,6 +203,18 @@ end
             flag_volume=true,
             λ_pump=532.0,
             λ_emission=600.0
+        )
+        p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
+        rel_err, _ = test_gradient(prob, p0)
+        @test rel_err < TOL_RELATIVE
+    end
+
+    @testset "3D Oblique Incidence (Shifted Nabla)" begin
+        println("\n=== 3D Oblique Incidence (Shifted Nabla) ===")
+        prob = build_test_problem(
+            foundry_mode=false,
+            θ=20.0,
+            flag_volume=true
         )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
