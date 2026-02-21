@@ -28,6 +28,12 @@ using Gridap.Geometry: DiscreteModel, get_face_labeling, get_face_mask, Boundary
 using GridapGmsh: GmshDiscreteModel
 
 # ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+include("Utils/RunLogger.jl")
+
+# ---------------------------------------------------------------------------
 # Types (order matters)
 # ---------------------------------------------------------------------------
 
@@ -115,6 +121,8 @@ using .Analysis
 # Core types
 export FieldConfig, cache_key
 export MaterialSpec, Environment, resolve_index
+export RunLogConfig, activate_run_logger!, deactivate_run_logger!, with_run_logger
+export log_event, log_debug, log_info, log_warn, log_error
 export ObjectiveFunction, compute_objective, compute_adjoint_sources, explicit_sensitivity
 export MaxwellProblem, effective_outputs, all_configs, is_elastic
 export EigenProblem

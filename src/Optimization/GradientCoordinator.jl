@@ -83,13 +83,13 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
         # PDE sensitivity (dA/dpf from adjoint fields)
         ∂g_∂pf_pde = pde_sensitivity(pde, fields, adjoints, pf, pt, sim, control; space=sim0.Pf)
         if any(isnan, ∂g_∂pf_pde)
-            println("WARNING: NaNs in PDE sensitivity")
+            log_warn(:objective, "NaNs detected in PDE sensitivity")
         end
 
         # Explicit sensitivity (dg/dpf, not through the PDE)
         ∂g_∂pf_explicit = explicit_sensitivity(objective, pde, fields, pf, pt, sim, control; space=sim0.Pf)
         if any(isnan, ∂g_∂pf_explicit)
-            println("WARNING: NaNs in explicit sensitivity")
+            log_warn(:objective, "NaNs detected in explicit sensitivity")
         end
 
         # Total sensitivity on mesh
