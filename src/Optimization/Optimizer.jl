@@ -18,7 +18,7 @@ function flat_substrate_norm(prob::OptimizationProblem)
     p_flat = zeros(Float64, length(prob.p))
     g_norm = objective_and_gradient!(Float64[], p_flat, prob)
     if !isfinite(g_norm) || g_norm <= 0.0
-        @warn "Flat-substrate normalization baseline is invalid; falling back to 1.0" g_norm
+        log_warn(:objective, "Flat-substrate normalization baseline is invalid; using 1.0"; g_norm)
         return 1.0
     end
     return g_norm
@@ -55,67 +55,68 @@ function optimize!(prob::OptimizationProblem;
     backup_every::Int=20,
     backup_path::Union{Nothing,String}=nothing,
     resume_from::Union{Nothing,String}=nothing)
+    with_run_logger(prob.pde.env.logger_cfg; root=prob.root) do
+        p_opt = copy(prob.p)
+        g_opt = 0.0
+        ckpt_path = isnothing(backup_path) ? joinpath(prob.root, "results_backup.jld2") : backup_path
 
-    p_opt = copy(prob.p)
-    g_opt = 0.0
-    ckpt_path = isnothing(backup_path) ? joinpath(prob.root, "results_backup.jld2") : backup_path
-
-    if !isnothing(resume_from)
-        resume_from_checkpoint!(prob, resume_from)
-        p_opt .= prob.p
-        g_opt = prob.g
-    end
-
-    g_norm = flat_substrate_norm(prob)
-    @info "Flat-substrate normalization baseline: g_norm = $g_norm"
-
-    # Initialize history
-    if empty_history && isnothing(resume_from)
-        empty!(prob.g_history)
-        prob.iteration = 0
-    elseif empty_history && !isnothing(resume_from)
-        @info "resume_from provided: preserving loaded g_history"
-    end
-
-    for (epoch, β) in enumerate(β_schedule)
-        @info "Epoch $epoch: β = $β"
-        @show Sys.total_memory() / 2^20
-        @show Sys.free_memory() / 2^20
-        @show sizeof(prob) * 1e-6
-        flush(stdout)
-        Libc.flush_cstdio()
-
-        prob.control.β = β
-
-        if !isnothing(α_schedule) && epoch <= length(α_schedule)
-            prob.pde = MaxwellProblem(
-                env=prob.pde.env,
-                inputs=prob.pde.inputs,
-                outputs=prob.pde.outputs,
-                α_loss=α_schedule[epoch]
-            )
+        if !isnothing(resume_from)
+            resume_from_checkpoint!(prob, resume_from)
+            p_opt .= prob.p
+            g_opt = prob.g
         end
 
-        epoch_use_constraints = use_constraints && (epoch == length(β_schedule))
-        g_opt, p_opt, _ = run_epoch!(prob, max_iter, epoch_use_constraints, tol;
-            g_norm, backup, backup_every, backup_path=ckpt_path)
+        g_norm = flat_substrate_norm(prob)
+        log_info(:objective, "Flat-substrate normalization baseline"; g_norm)
 
-        prob.p .= p_opt
-        prob.g = g_opt
+        # Initialize history
+        if empty_history && isnothing(resume_from)
+            empty!(prob.g_history)
+            prob.iteration = 0
+        elseif empty_history && !isnothing(resume_from)
+            log_info(:objective, "resume_from provided: preserving loaded g_history")
+        end
 
-        @info "  Epoch $epoch done: g = $g_opt"
-        @show Sys.total_memory() / 2^20
-        @show Sys.free_memory() / 2^20
-        @show sizeof(prob) * 1e-6
-        flush(stdout)
-        Libc.flush_cstdio()
+        for (epoch, β) in enumerate(β_schedule)
+            log_info(:epoch, "Epoch start"; epoch, β)
+            log_debug(:memory, "epoch memory snapshot (start)";
+                epoch,
+                total_mem_mb=Sys.total_memory() / 2^20,
+                free_mem_mb=Sys.free_memory() / 2^20,
+                prob_size_mb=sizeof(prob) * 1e-6)
+
+            prob.control.β = β
+
+            if !isnothing(α_schedule) && epoch <= length(α_schedule)
+                prob.pde = MaxwellProblem(
+                    env=prob.pde.env,
+                    inputs=prob.pde.inputs,
+                    outputs=prob.pde.outputs,
+                    α_loss=α_schedule[epoch]
+                )
+            end
+
+            epoch_use_constraints = use_constraints && (epoch == length(β_schedule))
+            g_opt, p_opt, _ = run_epoch!(prob, max_iter, epoch_use_constraints, tol;
+                g_norm, backup, backup_every, backup_path=ckpt_path)
+
+            prob.p .= p_opt
+            prob.g = g_opt
+
+            log_info(:epoch, "Epoch done"; epoch, g_opt_norm=g_opt)
+            log_debug(:memory, "epoch memory snapshot (end)";
+                epoch,
+                total_mem_mb=Sys.total_memory() / 2^20,
+                free_mem_mb=Sys.free_memory() / 2^20,
+                prob_size_mb=sizeof(prob) * 1e-6)
+        end
+
+        if backup
+            save_checkpoint(prob, ckpt_path)
+        end
+
+        return g_opt, p_opt
     end
-
-    if backup
-        save_checkpoint(prob, ckpt_path)
-    end
-
-    return g_opt, p_opt
 end
 
 # ---------------------------------------------------------------------------
@@ -134,23 +135,25 @@ function optimize!(prob::EigenOptimizationProblem;
     use_constraints::Bool=false,
     tol::Float64=1e-15)
 
-    p_opt = copy(prob.p)
-    g_opt = 0.0
+    with_run_logger(prob.pde.env.logger_cfg; root=prob.root) do
+        p_opt = copy(prob.p)
+        g_opt = 0.0
 
-    for (epoch, β) in enumerate(β_schedule)
-        @info "Epoch $epoch: β = $β"
+        for (epoch, β) in enumerate(β_schedule)
+            log_info(:epoch, "Eigen epoch start"; epoch, β)
 
-        prob.control.β = β
+            prob.control.β = β
 
-        g_opt, p_opt, _ = run_epoch_eigen!(prob, max_iter, use_constraints, tol)
+            g_opt, p_opt, _ = run_epoch_eigen!(prob, max_iter, use_constraints, tol)
 
-        prob.p .= p_opt
-        prob.g = g_opt
+            prob.p .= p_opt
+            prob.g = g_opt
 
-        @info "  Epoch $epoch done: g = $g_opt"
+            log_info(:epoch, "Eigen epoch done"; epoch, g_opt)
+        end
+
+        return g_opt, p_opt
     end
-
-    return g_opt, p_opt
 end
 
 # ---------------------------------------------------------------------------
@@ -173,15 +176,15 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     opt.maxeval = max_iter
 
     opt.max_objective = function (p, grad)
+        iter = prob.iteration + 1
         free_mem_before = Sys.free_memory() / 2^20
-        @show free_mem_before
-        @show sizeof(prob) * 1e-6
-        flush(stdout)
-        Libc.flush_cstdio()
+        log_debug(:memory, "objective callback (before)";
+            iter,
+            free_mem_mb=free_mem_before,
+            prob_size_mb=sizeof(prob) * 1e-6)
 
         g_raw = objective_and_gradient!(grad, p, prob)
         free_mem_after = Sys.free_memory() / 2^20
-        @show free_mem_after
         g = g_raw / g_norm
         grad ./= g_norm
         ret_grad .= grad
@@ -192,9 +195,15 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
             prob.∇g .= grad
         end
 
-        @show g
-        flush(stdout)
-        Libc.flush_cstdio()
+        log_debug(:memory, "objective callback (after)";
+            iter,
+            free_mem_mb=free_mem_after,
+            delta_free_mem_mb=(free_mem_after - free_mem_before))
+        log_info(:objective, "normalized objective";
+            iter,
+            g_norm=g,
+            g_raw,
+            grad_norm=norm(grad))
 
         next_iteration!(prob)
         log_iteration!(prob, g, p; backup, backup_every, backup_path)
@@ -203,6 +212,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     end
 
     if use_constraints
+        log_info(:constraints, "enabling constraints for this epoch")
         if prob.foundry_mode
             sim0 = default_sim(prob.sim)
             NLopt.inequality_constraint!(opt,
@@ -221,7 +231,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
 
     (g_opt, p_opt, ret) = optimize(opt, prob.p)
 
-    @info "  NLopt: $ret after $(opt.numevals) evaluations"
+    log_info(:epoch, "NLopt completed"; ret, evals=opt.numevals)
 
     return g_opt, p_opt, ret_grad
 end
@@ -253,7 +263,7 @@ function run_epoch_eigen!(prob::EigenOptimizationProblem, max_iter::Int, use_con
 
     (g_opt, p_opt, ret) = optimize(opt, prob.p)
 
-    @info "  NLopt: $ret after $(opt.numevals) evaluations"
+    log_info(:epoch, "NLopt (eigen) completed"; ret, evals=opt.numevals)
 
     return g_opt, p_opt, ret_grad
 end
@@ -278,7 +288,7 @@ function log_iteration!(prob::OptimizationProblem, g, p;
     push!(prob.g_history, g)
 
     if iter % 5 == 0
-        @info "Iter $iter: g = $(round(g, sigdigits=4))"
+        log_info(:objective, "iteration checkpoint"; iter, g=round(g, sigdigits=4))
     end
 
     if backup && backup_every > 0 && (iter % backup_every == 0)
@@ -343,7 +353,7 @@ function test_gradient(prob::OptimizationProblem, p::Vector{Float64}; δ::Float6
     end
 
     rel_error = norm(∇g - ∇g_fd) / (norm(∇g) + 1e-12)
-    @info "Gradient test: relative error = $rel_error"
+    log_info(:objective, "gradient test"; rel_error)
 
     return ∇g, ∇g_fd, rel_error
 end

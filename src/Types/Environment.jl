@@ -16,12 +16,14 @@ const MaterialSpec = Union{String,Float64}
 - `mat_design` — Design region material (typically metal)
 - `mat_substrate` — Substrate material (defaults to mat_design)
 - `mat_fluid` — Fluid/background material (default √1.77)
+- `logger_cfg` — Runtime logging config (default off)
 """
 Base.@kwdef struct Environment
     mat_design::MaterialSpec
     mat_substrate::MaterialSpec = mat_design
     mat_fluid::MaterialSpec = sqrt(1.77)
     bot_PEC::Bool = false
+    logger_cfg::RunLogConfig = RunLogConfig()
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════

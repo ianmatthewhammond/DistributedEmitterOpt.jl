@@ -11,7 +11,6 @@ module PardisoExt
 import DistributedEmitterOpt
 import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!, release_factor!
 import GridapPardiso
-using Printf: @printf
 using SparseArrays: SparseMatrixCSC, spzeros, tril
 
 # ---------------------------------------------------------------------------
@@ -43,9 +42,13 @@ end
 function log_pardiso_mem(tag::AbstractString)
     free_mb = Sys.free_memory() / 2^20
     total_mb = Sys.total_memory() / 2^20
-    @printf("[PardisoExt] %s free_mem_mb=%.2f total_mem_mb=%.2f\n", tag, free_mb, total_mb)
-    flush(stdout)
-    Libc.flush_cstdio()
+    DistributedEmitterOpt.log_debug(
+        :solver,
+        "Pardiso memory snapshot";
+        tag,
+        free_mem_mb=round(free_mb, digits=2),
+        total_mem_mb=round(total_mb, digits=2),
+    )
 end
 
 function release_pardiso!(factor::PardisoFactor)
