@@ -25,7 +25,7 @@ function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0
 
     des_low, des_high = getdesignz(sim.labels, sim.Ω)
 
-    PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α)
+    PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α, env.bot_PEC)
 end
 
 # ---------------------------------------------------------------------------
