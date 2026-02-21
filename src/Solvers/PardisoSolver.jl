@@ -5,7 +5,7 @@ Optional sparse direct solver using Intel MKL Pardiso.
 Requires the user to independently install Pardiso.jl.
 
 The actual implementation is in ext/PardisoExt.jl and only loads
-when Pardiso.jl is available.
+when both Pardiso.jl and GridapPardiso.jl are available.
 """
 
 import SparseArrays: SparseMatrixCSC
@@ -55,7 +55,7 @@ end
 
 # Stub implementations that error if extension not loaded
 function lu!(::PardisoSolver, A::SparseMatrixCSC)
-    error("Pardiso.jl not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\")")
+    error("Pardiso extension not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\"); Pkg.add(\"GridapPardiso\")")
 end
 
 function lu!(solver::PardisoSolver, factor, A::SparseMatrixCSC)
@@ -63,7 +63,7 @@ function lu!(solver::PardisoSolver, factor, A::SparseMatrixCSC)
 end
 
 function filter_lu!(::PardisoSolver, A::SparseMatrixCSC)
-    error("Pardiso.jl not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\")")
+    error("Pardiso extension not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\"); Pkg.add(\"GridapPardiso\")")
 end
 
 function filter_lu!(solver::PardisoSolver, factor, A::SparseMatrixCSC)
@@ -71,11 +71,11 @@ function filter_lu!(solver::PardisoSolver, factor, A::SparseMatrixCSC)
 end
 
 function solve!(::PardisoSolver, factor, b::Vector)
-    error("Pardiso.jl not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\")")
+    error("Pardiso extension not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\"); Pkg.add(\"GridapPardiso\")")
 end
 
 function solve_adjoint!(::PardisoSolver, factor, b::Vector)
-    error("Pardiso.jl not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\")")
+    error("Pardiso extension not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\"); Pkg.add(\"GridapPardiso\")")
 end
 
 release_factor!(::PardisoSolver, factor) = nothing
