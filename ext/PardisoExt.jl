@@ -11,6 +11,7 @@ module PardisoExt
 import DistributedEmitterOpt
 import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!, release_factor!
 import GridapPardiso
+using Printf: @printf
 using SparseArrays: SparseMatrixCSC, spzeros, tril
 
 # ---------------------------------------------------------------------------
@@ -39,8 +40,17 @@ function sparsity_hash(A::SparseMatrixCSC{T,Int}, mtype::Int) where T
     hash(A.rowval, h)
 end
 
+function log_pardiso_mem(tag::AbstractString)
+    free_mb = Sys.free_memory() / 2^20
+    total_mb = Sys.total_memory() / 2^20
+    @printf("[PardisoExt] %s free_mem_mb=%.2f total_mem_mb=%.2f\n", tag, free_mb, total_mb)
+    flush(stdout)
+    Libc.flush_cstdio()
+end
+
 function release_pardiso!(factor::PardisoFactor)
     factor.released && return nothing
+    log_pardiso_mem("release:start")
 
     if !isnothing(factor.symbolic)
         try
@@ -56,6 +66,7 @@ function release_pardiso!(factor::PardisoFactor)
     factor.psolver = nothing
     factor.A = spzeros(eltype(factor.A), 0, 0)
     factor.released = true
+    log_pardiso_mem("release:done")
     return nothing
 end
 
@@ -74,6 +85,7 @@ function new_pardiso_factor(
     mtype::Int;
     use_iparm::Bool,
 ) where T
+    log_pardiso_mem("new_factor:start")
     Awork = matrix_for_mtype(A, mtype)
     psolver = gridap_solver(solver, mtype; use_iparm)
     symbolic = GridapPardiso.symbolic_setup(psolver, Awork)
@@ -81,6 +93,7 @@ function new_pardiso_factor(
 
     factor = PardisoFactor{T}(symbolic, numerical, psolver, Awork, mtype, sparsity_hash(Awork, mtype), false)
     finalizer(release_pardiso!, factor)
+    log_pardiso_mem("new_factor:done")
     return factor
 end
 
@@ -91,6 +104,7 @@ function refactor_pardiso!(
     mtype::Int;
     use_iparm::Bool,
 ) where T
+    log_pardiso_mem("refactor:start")
     Awork = matrix_for_mtype(A, mtype)
     new_hash = sparsity_hash(Awork, mtype)
 
@@ -105,10 +119,12 @@ function refactor_pardiso!(
         factor.A = Awork
         factor.pattern_hash = new_hash
         factor.released = false
+        log_pardiso_mem("refactor:reuse_symbolic")
         return factor
     end
 
     release_pardiso!(factor)
+    log_pardiso_mem("refactor:rebuild_symbolic")
     return new_pardiso_factor(solver, A, mtype; use_iparm)
 end
 
