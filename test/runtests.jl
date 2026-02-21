@@ -17,4 +17,8 @@ using Test
     @testset "Objective Baselines Tests" begin
         include("objective_baselines_tests.jl")
     end
+
+    @testset "Logger Tests" begin
+        include("logger_tests.jl")
+    end
 end
