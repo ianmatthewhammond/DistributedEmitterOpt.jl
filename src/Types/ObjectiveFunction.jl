@@ -18,6 +18,8 @@ abstract type ObjectiveFunction end
 function compute_objective end
 function compute_adjoint_sources end
 function explicit_sensitivity end
+function explicit_sensitivity_pt end
+function explicit_sensitivity_pt_grid! end
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Default implementations
@@ -26,3 +28,11 @@ function explicit_sensitivity end
 """Default: no explicit sensitivity term."""
 explicit_sensitivity(::ObjectiveFunction, pde, fields, pf, pt, sim, control; space=sim.Pf) =
     zeros(Float64, num_free_dofs(space))
+
+"""Default: no explicit pt-sensitivity term."""
+explicit_sensitivity_pt(::ObjectiveFunction, pde, fields, pt, sim; space=sim.Pf) =
+    zeros(Float64, num_free_dofs(space))
+
+"""Default grid-accumulated pt sensitivity: zero."""
+explicit_sensitivity_pt_grid!(out::Vector{Float64}, ::ObjectiveFunction, pde, fields, pt, sim) =
+    fill!(out, 0.0)

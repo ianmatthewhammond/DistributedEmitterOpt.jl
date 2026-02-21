@@ -134,7 +134,7 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
             (k^2) * ∫(v ⋅ (εₘ * u))sim.dΩ_design +
             # Sommerfeld ABC (top and bottom)
             +im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_top +
-            + bot_PEC * 1im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
+            +bot_PEC * 1im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
         )
     end
 
@@ -186,4 +186,27 @@ function assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys::PhysicalPara
     end
 
     return ∂g_∂pf
+end
+
+"""
+    assemble_material_sensitivity_pt(E, λ, pt, sim, phys; space=sim.Pf) -> Vector
+
+Legacy-style material sensitivity with respect to projected design `pt`.
+This excludes any SSP chain term (dpt/dpf), matching old foundry smoothing flow.
+"""
+function assemble_material_sensitivity_pt(E, λ, pt, sim, phys::PhysicalParams; space=sim.Pf)
+    k = phys.ω
+    ∂εε = p -> ∂ε_∂p(p, phys)
+
+    ∂g_∂pt = assemble_vector(space) do v
+        (k^2) * ∫(
+            real(
+                v *
+                (∂εε ∘ pt) *
+                (conj(λ) ⋅ E)
+            )
+        )sim.dΩ_design
+    end
+
+    return ∂g_∂pt
 end

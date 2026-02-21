@@ -33,10 +33,7 @@ function compute_gradient_eigen_2d!(∇g::Vector{Float64}, p::Vector{Float64},
 
     pf_vec = filter_grid(p, sim0, control)
 
-    nx, ny = length(sim0.grid.x), length(sim0.grid.y)
-    sim0.grid.params[:, :] = reshape(pf_vec, (nx, ny))
-    pf_vals = [pf_grid(node, sim0.grid) for node in sim0.grid.nodes]
-    pf = FEFunction(sim0.Pf, pf_vals)
+    pf = build_foundry_pf(pf_vec, sim0, control)
 
     pt = project_ssp(pf, control)
 
@@ -48,7 +45,7 @@ function compute_gradient_eigen_2d!(∇g::Vector{Float64}, p::Vector{Float64},
     ∂g_∂pf_vec = eigen_sensitivity(objective, result, pf, pt, sim, control; space=sim0.Pf)
 
     ∂g_∂pf_grid = similar(p)
-    apply_grid_adjoint!(∂g_∂pf_grid, sim0.grid, ∂g_∂pf_vec)
+    map_foundry_adjoint!(∂g_∂pf_grid, sim0, control, ∂g_∂pf_vec)
     ∂g_∂p = filter_grid_adjoint(∂g_∂pf_grid, sim0, control)
 
     if !isempty(∇g)

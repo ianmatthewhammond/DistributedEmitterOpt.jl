@@ -187,14 +187,15 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
         # Filter on grid
         pf_vec = filter_grid(p_opt, sim0, prob.control)
 
-        # Interpolate to mesh (Piecewise Linear Pf)
-        nx, ny = length(sim0.grid.x), length(sim0.grid.y)
-        p_grid_mat = reshape(pf_vec, nx, ny)
-        pf_vals = [pf_grid(node, p_grid_mat, sim0.grid.x, sim0.grid.y) for node in sim0.grid.nodes]
-        pf = FEFunction(sim0.Pf, pf_vals)
-
-        # SSP projection on mesh
-        pt = project_ssp(pf, prob.control)
+        if prob.control.foundry_projection_mode == :legacy
+            # Legacy foundry flow: SSP on 2D grid, then interpolate projected grid.
+            pt_vec = smoothed_projection_vec(pf_vec, prob.control, sim0)
+            pt = build_foundry_pf(pt_vec, sim0, prob.control)
+        else
+            # Current flow: interpolate pf, then SSP on FEM.
+            pf = build_foundry_pf(pf_vec, sim0, prob.control)
+            pt = project_ssp(pf, prob.control)
+        end
     else
         # 3D mode (placeholder implementation)
         pf_vec = p_opt # Assumes no filter for simplicity if not foundry
