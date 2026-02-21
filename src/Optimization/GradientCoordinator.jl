@@ -20,8 +20,9 @@ Forward + adjoint pass. Dispatches on foundry_mode.
 """
 function objective_and_gradient!(∇g::Vector{Float64}, p::Vector{Float64},
     prob::OptimizationProblem)
-    # TODO: use design-aware cache invalidation (hash/version) instead of always clearing.
-    clear_maxwell_factors!(prob.pool)
+    # Keep cached factors and let solver backends refactor in-place each call.
+    # This avoids repeated destroy/recreate cycles (notably costly for Pardiso)
+    # while still updating matrix values for the current design.
     if prob.foundry_mode
         return compute_gradient_2d_opt!(∇g, p, prob)
     else

@@ -50,11 +50,11 @@ function solve_forward!(pde::MaxwellProblem, pt, sim, pool)
 
         phys = build_phys_params(fc, pde.env, sim_fc; α=pde.α_loss)
 
-        if !has_maxwell_factor(cache)
-            pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
-            A = assemble_maxwell(pt_fc, sim_fc, phys)
-            maxwell_lu!(cache, A)
-        end
+        # Always update the Maxwell factorization for current pt.
+        # `maxwell_lu!` performs in-place refactorization when a cached factor exists.
+        pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
+        A = assemble_maxwell(pt_fc, sim_fc, phys)
+        maxwell_lu!(cache, A)
 
         source_y = (fc.polarization == :y)
         b = assemble_source(sim_fc, phys; source_y)
