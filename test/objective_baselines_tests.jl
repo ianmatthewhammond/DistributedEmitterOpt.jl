@@ -33,15 +33,18 @@ const CASES = [
 const OBJECTIVE_BASELINES = Dict(
     "3D Anisotropic + Multi Output" => (len=813, norm=14.345340287591288, obj=116460.59121184202),
     "3D Inelastic Scattering" => (len=813, norm=14.345340287591288, obj=106857.88184860666),
-    "2D Foundry Anisotropic + Multi Output" => (len=10000, norm=50.37032830942858, obj=995260.7610887402),
-    "2D Foundry Anisotropic" => (len=10000, norm=50.37032830942858, obj=986770.7457187152),
+    # Foundry baselines updated after the getgrid sizing fix (cube root +
+    # design-restricted np): nx×ny dropped from 100×100 to 17×17, which
+    # shifts every downstream value (p length, norm, objective).
+    "2D Foundry Anisotropic + Multi Output" => (len=289, norm=8.588540846480063, obj=1.0190166191632946e6),
+    "2D Foundry Anisotropic" => (len=289, norm=8.588540846480063, obj=1.0102446065974964e6),
     "3D Surface Objective" => (len=813, norm=14.345340287591288, obj=1447.3803882181296),
     "3D With Damage Model" => (len=813, norm=14.345340287591288, obj=106625.11391929301),
     "3D Elastic Baseline" => (len=813, norm=14.345340287591288, obj=106625.11391929301),
     "3D Anisotropic (Elastic)" => (len=813, norm=14.345340287591288, obj=114082.55721479755),
-    "2D Foundry Inelastic" => (len=10000, norm=50.37032830942858, obj=896830.5675490539),
+    "2D Foundry Inelastic" => (len=289, norm=8.588540846480063, obj=915937.6261181335),
     "3D Complex Configuration" => (len=813, norm=14.345340287591288, obj=108785.70661678203),
-    "2D Foundry Mode" => (len=10000, norm=50.37032830942858, obj=922266.9934199577),
+    "2D Foundry Mode" => (len=289, norm=8.588540846480063, obj=944212.861811626),
 )
 
 function outputs_for_case(case::CaseSpec)
