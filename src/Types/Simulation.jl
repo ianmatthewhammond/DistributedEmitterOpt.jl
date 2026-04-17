@@ -165,7 +165,11 @@ function build_simulation(meshfile::String;
         end
     end
     np_mesh = num_free_dofs(sim.P)
-    sim.grid = getgrid(sim.labels, sim.Ω, np_mesh, nodes; sizes)
+    # FoundryGrid sizing uses design-restricted cell count so nx/ny track
+    # FEM resolution inside the design region, independent of air/substrate/PML
+    # mesh refinement. `sim.P` is Lagrange P0, so cells = DOFs on that subset.
+    np_design = count(cellmask_d)
+    sim.grid = getgrid(sim.labels, sim.Ω, np_design, nodes; sizes)
 
     # DOF count based on mode
     if foundry_mode
