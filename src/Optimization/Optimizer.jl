@@ -1,12 +1,20 @@
 """
     Optimizer
 
-NLopt-based optimization with beta-continuation scheduling (CCSAQ algorithm).
+Beta-continuation topology optimization. Two backends:
+
+- `:nlopt` (default) — `NLopt.jl`, algorithm `LD_CCSAQ`. Maximization.
+- `:standalone_mma`, `:standalone_ccsaq` — the standalone NLopt-MMA-CCSA
+  shared library (see `MmaccsaBackend`). Minimization (objective is
+  negated internally), with process-portable checkpoints written next to
+  the JLD2 backup at `<backup_path>.mma_state`.
 """
 
 import NLopt
 import NLopt: Opt, optimize
 import JLD2
+
+using .MmaccsaBackend: MmaState, save_state, load_state, free_state!
 
 """
     flat_substrate_norm(prob::OptimizationProblem) -> Float64
@@ -54,7 +62,10 @@ function optimize!(prob::OptimizationProblem;
     backup::Bool=false,
     backup_every::Int=20,
     backup_path::Union{Nothing,String}=nothing,
-    resume_from::Union{Nothing,String}=nothing)
+    resume_from::Union{Nothing,String}=nothing,
+    backend::Symbol=:nlopt)
+    backend in (:nlopt, :standalone_mma, :standalone_ccsaq) ||
+        throw(ArgumentError("backend must be :nlopt, :standalone_mma, or :standalone_ccsaq (got :$backend)"))
     with_run_logger(prob.pde.env.logger_cfg; root=prob.root) do
         p_opt = copy(prob.p)
         g_opt = 0.0
@@ -77,7 +88,18 @@ function optimize!(prob::OptimizationProblem;
             log_info(:objective, "resume_from provided: preserving loaded g_history")
         end
 
+        start_epoch = if !isnothing(resume_from) && prob.iteration > 0
+            div(prob.iteration, max_iter) + 1
+        else
+            1
+        end
+        if start_epoch > 1
+            log_info(:epoch, "Resuming: skipping $(start_epoch - 1) completed epoch(s)";
+                start_epoch, total_iterations=prob.iteration)
+        end
+
         for (epoch, β) in enumerate(β_schedule)
+            epoch < start_epoch && continue
             log_info(:epoch, "Epoch start"; epoch, β)
             log_debug(:memory, "epoch memory snapshot (start)";
                 epoch,
@@ -98,7 +120,7 @@ function optimize!(prob::OptimizationProblem;
 
             epoch_use_constraints = use_constraints && (epoch == length(β_schedule))
             g_opt, p_opt, _ = run_epoch!(prob, max_iter, epoch_use_constraints, tol;
-                g_norm, backup, backup_every, backup_path=ckpt_path)
+                g_norm, backup, backup_every, backup_path=ckpt_path, backend, epoch)
 
             prob.p .= p_opt
             prob.g = g_opt
@@ -162,6 +184,28 @@ end
 
 """Run one epoch of optimization at fixed beta."""
 function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
+    g_norm::Float64=1.0,
+    backup::Bool=false,
+    backup_every::Int=20,
+    backup_path::Union{Nothing,String}=nothing,
+    backend::Symbol=:nlopt,
+    epoch::Int=0)
+
+    if backend === :nlopt
+        return _run_epoch_nlopt!(prob, max_iter, use_constraints, tol;
+            g_norm, backup, backup_every, backup_path)
+    else
+        algorithm = backend === :standalone_mma ? :mma : :ccsaq
+        return _run_epoch_standalone!(prob, max_iter, use_constraints, tol;
+            g_norm, backup, backup_every, backup_path, algorithm, epoch)
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Backend: NLopt.jl (original path)
+# ---------------------------------------------------------------------------
+
+function _run_epoch_nlopt!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
     g_norm::Float64=1.0,
     backup::Bool=false,
     backup_every::Int=20,
@@ -232,6 +276,133 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     (g_opt, p_opt, ret) = optimize(opt, prob.p)
 
     log_info(:epoch, "NLopt completed"; ret, evals=opt.numevals)
+
+    return g_opt, p_opt, ret_grad
+end
+
+# ---------------------------------------------------------------------------
+# Backend: standalone NLopt-MMA-CCSA (minimization, with checkpoint state)
+# ---------------------------------------------------------------------------
+
+# State path layout: <backup_path>.epoch<N>.mma_state. Each epoch runs in a
+# fresh state because beta-continuation changes the objective shape — the
+# MMA asymptote/sigma history from epoch k-1 isn't meaningful for epoch k.
+# The on-disk state lets a job killed mid-epoch resume the *same* epoch
+# with identical algorithm state.
+_state_path(backup_path::Nothing, epoch::Int) = nothing
+_state_path(backup_path::String, epoch::Int) = backup_path * ".epoch$(epoch).mma_state"
+
+function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
+    g_norm::Float64=1.0,
+    backup::Bool=false,
+    backup_every::Int=20,
+    backup_path::Union{Nothing,String}=nothing,
+    algorithm::Symbol=:mma,
+    epoch::Int=0)
+    np = length(prob.p)
+    ret_grad = zeros(Float64, np)
+
+    state_path = _state_path(backup_path, epoch)
+    state = if state_path !== nothing && isfile(state_path)
+        log_info(:epoch, "standalone backend: resuming from on-disk state"; state_path)
+        load_state(state_path)
+    else
+        MmaState()
+    end
+
+    # Standalone minimizes; DEO maximizes. Negate objective + gradient on the
+    # boundary, but keep `prob.g` and `prob.g_history` in DEO's max convention.
+    objective = function (p, grad)
+        iter = prob.iteration + 1
+        free_mem_before = Sys.free_memory() / 2^20
+        log_debug(:memory, "objective callback (before)";
+            iter,
+            free_mem_mb=free_mem_before,
+            prob_size_mb=sizeof(prob) * 1e-6)
+
+        # `grad` is empty when the C side passes NULL (gradient-free probe).
+        # NLopt-MMA never does this for LD algorithms, but defend anyway.
+        scratch = isempty(grad) ? zeros(Float64, length(p)) : grad
+        g_raw = objective_and_gradient!(scratch, p, prob)
+        free_mem_after = Sys.free_memory() / 2^20
+        g = g_raw / g_norm
+        scratch ./= g_norm
+
+        ret_grad .= scratch
+        prob.g = g
+        if !isempty(prob.∇g)
+            prob.∇g .= scratch
+        end
+
+        if !isempty(grad)
+            grad .*= -1.0   # min -f  (after prob.∇g is saved)
+        end
+
+        log_debug(:memory, "objective callback (after)";
+            iter,
+            free_mem_mb=free_mem_after,
+            delta_free_mem_mb=(free_mem_after - free_mem_before))
+        log_info(:objective, "normalized objective";
+            iter,
+            g_norm=g,
+            g_raw,
+            grad_norm=norm(scratch))
+
+        next_iteration!(prob)
+        log_iteration!(prob, g, p; backup, backup_every, backup_path)
+
+        # Save standalone checkpoint on the same cadence as the JLD2 backup.
+        # NB: this fires only between MMA outer iterations (the C side calls
+        # the objective at well-defined points), so the state snapshot is
+        # consistent.
+        if backup && backup_every > 0 && state_path !== nothing &&
+            (prob.iteration % backup_every == 0) && state.ref[] != C_NULL
+            try
+                save_state(state_path, state)
+            catch err
+                log_warn(:objective, "failed to save standalone checkpoint"; err=string(err))
+            end
+        end
+
+        return -g   # standalone minimizes
+    end
+
+    constraints = Tuple{Function,Float64}[]
+    if use_constraints
+        log_info(:constraints, "enabling constraints for this epoch (standalone backend)")
+        if prob.foundry_mode
+            sim0 = default_sim(prob.sim)
+            push!(constraints, ((p, g) -> glc_solid(p, g; sim=sim0, control=prob.control), 1e-8))
+            push!(constraints, ((p, g) -> glc_void(p, g; sim=sim0, control=prob.control), 1e-8))
+        else
+            sim0 = default_sim(prob.sim)
+            obj = (; sim=sim0, control=prob.control, cache_pump=default_pool(prob.pool).filter_cache)
+            push!(constraints, ((p, g) -> glc_solid_fe(p, g, obj), 1e-8))
+            push!(constraints, ((p, g) -> glc_void_fe(p, g, obj), 1e-8))
+        end
+    end
+
+    p_opt = copy(prob.p)
+    lb = zeros(Float64, np)
+    ub = ones(Float64, np)
+
+    ret, _, _ = MmaccsaBackend.minimize!(algorithm, objective, p_opt;
+        lb=lb, ub=ub, maxeval=max_iter, ftol_rel=tol, state=state,
+        constraints=constraints)
+
+    g_opt = prob.g   # in DEO's max convention (set inside the callback)
+
+    if backup && state_path !== nothing && state.ref[] != C_NULL
+        try
+            save_state(state_path, state)
+        catch err
+            log_warn(:epoch, "failed to save standalone checkpoint at epoch end"; err=string(err))
+        end
+    end
+
+    free_state!(state)
+
+    log_info(:epoch, "standalone $(algorithm) completed"; ret, evals=prob.iteration, g_opt)
 
     return g_opt, p_opt, ret_grad
 end
