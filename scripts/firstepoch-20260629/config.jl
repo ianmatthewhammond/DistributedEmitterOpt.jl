@@ -63,3 +63,21 @@ const INIT_VALUE = 0.5           # uniform-0.5 start (trap-2: broadcast over np)
 
 # Snapshot cadence: iters 1..10, then every 10th.
 should_snapshot(iter::Integer) = (iter <= 10) || (iter % 10 == 0)
+
+# Compute nodes have no internet. The worktrees carry a Manifest copied from the
+# (already-instantiated) main checkout, so the shared depot already has every
+# package; instantiate should only add stdlibs (no download). We force offline
+# mode and treat instantiate as best-effort: if it fails we still try `using`,
+# which resolves from the populated depot.
+import Pkg
+function ensure_instantiated()
+    try
+        Pkg.offline(true)
+    catch
+    end
+    try
+        Pkg.instantiate()
+    catch e
+        @warn "Pkg.instantiate() failed; continuing on the shared depot" exception=(e,)
+    end
+end
