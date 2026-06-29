@@ -251,6 +251,7 @@ function _run_epoch_nlopt!(prob::OptimizationProblem, max_iter::Int, use_constra
 
         next_iteration!(prob)
         log_iteration!(prob, g, p; backup, backup_every, backup_path)
+        _firstepoch_snapshot!(prob, g_raw, g, p)
 
         return g
     end
@@ -350,6 +351,7 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
 
         next_iteration!(prob)
         log_iteration!(prob, g, p; backup, backup_every, backup_path)
+        _firstepoch_snapshot!(prob, g_raw, g, p)
 
         # Save standalone checkpoint on the same cadence as the JLD2 backup.
         # NB: this fires only between MMA outer iterations (the C side calls
@@ -446,6 +448,27 @@ end
 """Initialize history tracking."""
 function init_history!(prob::OptimizationProblem)
     prob.g_history = Float64[]
+end
+
+"""
+First-epoch divergence study (quest tim-130116-82977): optionally dump a
+per-iteration snapshot of `(iter, g_raw, g_normalized, design)` to
+`ENV["FIRSTEPOCH_SNAP_DIR"]` at iters 1..10 and every 10th thereafter. This is
+a NO-OP unless that env var is set, so it is inert for all normal runs.
+"""
+function _firstepoch_snapshot!(prob::OptimizationProblem, g_raw, g, p)
+    snapdir = get(ENV, "FIRSTEPOCH_SNAP_DIR", "")
+    isempty(snapdir) && return nothing
+    iter = prob.iteration
+    (iter <= 10 || iter % 10 == 0) || return nothing
+    mkpath(snapdir)
+    JLD2.save(joinpath(snapdir, "snap_" * lpad(iter, 4, '0') * ".jld2"), Dict(
+        "iter" => iter,
+        "g_raw" => Float64(g_raw),
+        "g" => Float64(g),
+        "p" => collect(Float64, p),
+    ))
+    return nothing
 end
 
 """Log iteration to console and optionally save checkpoint."""
