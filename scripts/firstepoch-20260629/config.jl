@@ -5,9 +5,15 @@
 # Pure constants only — no package dependencies, safe to `include` anywhere.
 # =============================================================================
 
-# --- Roots (override via env; defaults are the Supercloud worktrees) ---------
+# --- Roots (override via env) ------------------------------------------------
+# OLD points at the main Emitter3D checkout (used READ-ONLY: we make zero edits,
+# the manual NLopt loop drives e3.stepobjective directly). Its Project+Manifest
+# are self-consistent and proven to import by the test-divergence harness; the
+# worktree's committed Project required Arpack (absent from the copied Manifest),
+# so we use the main checkout instead. NEW uses the DEO worktree (carries the
+# snapshot hook + a self-consistent Manifest).
 const OLD_ROOT = get(ENV, "FIRSTEPOCH_OLD_ROOT",
-    "/home/gridsan/ihammond/GitHub/worktrees/Emitter3D-firstepoch-20260629")
+    "/home/gridsan/ihammond/GitHub/Emitter3DTopOpt")
 const NEW_ROOT = get(ENV, "FIRSTEPOCH_NEW_ROOT",
     "/home/gridsan/ihammond/GitHub/worktrees/DEO-firstepoch-20260629")
 const RUNROOT = get(ENV, "FIRSTEPOCH_RUNROOT",

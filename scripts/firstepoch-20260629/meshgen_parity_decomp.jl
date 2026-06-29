@@ -31,9 +31,8 @@ println("RUNROOT  = $RUNROOT")
 println("MESHFILE = $MESHFILE")
 flush(stdout)
 
-# --- OLD environment ---------------------------------------------------------
+# --- OLD environment (read-only main checkout; no instantiate) ---------------
 Pkg.activate(OLD_ROOT)
-ensure_instantiated()
 import Emitter3DTopOpt as e3
 include(e3.includesolver("Umfpack")); import .UmfpackSolver as OldUmfpackSolver
 include(e3.includescript("Setup")); using .Setup
@@ -173,6 +172,28 @@ JLD2.save(joinpath(OUTDIR, "decomp.jld2"), Dict(
     "cos_grad" => cosg, "rel_grad" => relg,
     "p0" => p0,
 ))
+
+# --- Extra intermediates (best-effort; core numbers already written above) ---
+# At uniform-0.5 the filter+projection is ~identity, so these mainly RULE OUT
+# the filter/projection as the source and confirm channel counts.
+open(joinpath(OUTDIR, "decomp.txt"), "a") do io
+    println(io, "\n--- extra intermediates (best-effort) ---")
+    try
+        println(io, "NEW channels: inputs=", length(new_prob.pde.inputs),
+                    " outputs=", length(new_prob.pde.outputs))
+    catch e
+        println(io, "NEW channels: <error: ", e, ">")
+    end
+    try
+        sim0 = DEO.default_sim(new_prob.sim)
+        pf = DEO.filter_grid(p0, sim0, new_prob.control)
+        println(io, "NEW filtered design pf @ p=0.5: min=", minimum(pf),
+                    " max=", maximum(pf), " mean=", sum(pf)/length(pf),
+                    " len=", length(pf))
+    catch e
+        println(io, "NEW filter_grid: <error: ", e, ">")
+    end
+end
 
 println("\n===== ITER-1 DECOMPOSITION =====")
 println(read(joinpath(OUTDIR, "decomp.txt"), String))
