@@ -3,9 +3,9 @@
 #SBATCH -p xeon-g6-volta
 #SBATCH --exclusive
 #SBATCH --mem=0
-#SBATCH --time=12:00:00
-#SBATCH -J fe-arm-old
-#SBATCH -o /home/gridsan/ihammond/firstepoch-compare-20260629/arm-old/slurm-%j.out
+#SBATCH --time=2:00:00
+#SBATCH -J fe-decomp-e3
+#SBATCH -o /home/gridsan/ihammond/firstepoch-compare-20260629/decomp/e3-slurm-%j.out
 
 set -u
 echo "Job $SLURM_JOB_ID on $(hostname) at $(date)"
@@ -17,7 +17,7 @@ export FIRSTEPOCH_RUNROOT=/home/gridsan/ihammond/firstepoch-compare-20260629
 SCRIPTS="$FIRSTEPOCH_NEW_ROOT/scripts/firstepoch-20260629"
 export JULIA_NUM_THREADS="${SLURM_CPUS_ON_NODE:-40}"
 
-julia --project="$FIRSTEPOCH_OLD_ROOT" "$SCRIPTS/arm_old.jl"
+julia --project="$FIRSTEPOCH_OLD_ROOT" "$SCRIPTS/decomp_e3.jl"
 rc=$?
 echo "exit $rc at $(date)"
 exit $rc

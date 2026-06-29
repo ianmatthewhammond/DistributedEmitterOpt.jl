@@ -1,6 +1,8 @@
 #!/bin/bash
 #SBATCH -N 1
+#SBATCH -p xeon-g6-volta
 #SBATCH --exclusive
+#SBATCH --mem=0
 #SBATCH --time=12:00:00
 #SBATCH -J fe-arm-new-ccsaq
 #SBATCH -o /home/gridsan/ihammond/firstepoch-compare-20260629/arm-new-ccsaq/slurm-%j.out
