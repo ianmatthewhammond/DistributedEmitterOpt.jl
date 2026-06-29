@@ -33,7 +33,7 @@ flush(stdout)
 
 # --- OLD environment ---------------------------------------------------------
 Pkg.activate(OLD_ROOT)
-Pkg.instantiate()
+ensure_instantiated()
 import Emitter3DTopOpt as e3
 include(e3.includesolver("Umfpack")); import .UmfpackSolver as OldUmfpackSolver
 include(e3.includescript("Setup")); using .Setup
@@ -41,7 +41,7 @@ include(joinpath(@__DIR__, "old_common.jl"))
 
 # --- NEW environment ---------------------------------------------------------
 Pkg.activate(NEW_ROOT)
-Pkg.instantiate()
+ensure_instantiated()
 import DistributedEmitterOpt as DEO
 import JLD2
 include(joinpath(@__DIR__, "new_common.jl"))

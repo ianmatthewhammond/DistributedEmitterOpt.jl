@@ -9,7 +9,7 @@ using LinearAlgebra
 include(joinpath(@__DIR__, "config.jl"))
 
 Pkg.activate(OLD_ROOT)
-Pkg.instantiate()
+ensure_instantiated()
 import Emitter3DTopOpt as e3
 include(e3.includesolver("Umfpack")); import .UmfpackSolver as OldUmfpackSolver
 include(e3.includescript("Setup")); using .Setup

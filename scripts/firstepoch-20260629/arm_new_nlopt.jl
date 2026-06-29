@@ -10,7 +10,7 @@ using LinearAlgebra
 include(joinpath(@__DIR__, "config.jl"))
 
 Pkg.activate(NEW_ROOT)
-Pkg.instantiate()
+ensure_instantiated()
 import DistributedEmitterOpt as DEO
 include(joinpath(@__DIR__, "new_common.jl"))
 include(joinpath(@__DIR__, "manual_loop.jl"))
