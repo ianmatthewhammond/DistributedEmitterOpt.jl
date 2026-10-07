@@ -263,7 +263,7 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
                 if obj.surface
                     term += dmg * real(integrand - 2 * integrand * pt_out)
                 end
-                ∫((((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf_out, ∇pf_out)) *
+                ∫(dpt_dpf_field(v, pf_out, control, sim_out.Ω_design) *
                   term)sim_out.dΩ_design
             end
 

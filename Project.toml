@@ -44,6 +44,7 @@ VisualizationExt = ["PyCall", "Images", "Colors", "ColorSchemes", "FileIO", "CSV
 [compat]
 CSV = "0.10.15"
 DataFrames = "1.8.1"
+GridapPardiso = "0.7.0"
 KrylovKit = "0.10.2"
 MUMPS = "1"
 Pardiso = "0.5"

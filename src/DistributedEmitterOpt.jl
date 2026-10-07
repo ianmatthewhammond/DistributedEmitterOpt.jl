@@ -24,6 +24,7 @@ using Gridap: TestFESpace, ReferenceFE, CellField, interpolate
 using Gridap: nedelec, lagrangian
 using Gridap: VectorValue, ∇, ⋅, outer, num_free_dofs
 using Gridap: assemble_matrix, assemble_vector
+using Gridap.CellData: get_physical_coordinate
 using Gridap.Geometry: DiscreteModel, get_face_labeling, get_face_mask, BoundaryTriangulation
 using GridapGmsh: GmshDiscreteModel
 
@@ -163,6 +164,7 @@ export filter_grid, filter_grid_adjoint
 export filter_helmholtz!, filter_helmholtz_adjoint!
 export project_grid, project_grid_adjoint
 export project_fe, project_ssp
+export smooth_project_sidewall, sidewall_partials, dpt_dpf_sidewall, dpt_dpf_field
 export christiansen_ε, ∂christiansen_ε
 export glc_solid, glc_void, glc_solid_fe, glc_void_fe
 
