@@ -79,9 +79,12 @@ function build_test_problem(;
     λ_pump::Float64=λ,
     λ_emission::Float64=λ,
     complex_config::Bool=false, # If true, use mixed pol/weights
+    surface_mode::Symbol=:band,  # :band (legacy pt(1-pt)) or :tv_void (SurfaceShell.jl)
+    t_shell::Float64=10.0,
     γ_damage::Float64=1.0,       # damage model parameters (only used when use_damage=true);
     E_threshold::Float64=10.0,   # the defaults leave the test fields BELOW threshold (dmg ≈ 1)
     foundry_projection_mode::Symbol=:current,  # :legacy = grid SSP and a projected-field closure
+    ε_grad::Float64=1e-6,
     use_sidewall::Bool=false,      # linear sidewall on the 2D-DOF extrusion
     sidewall_slope::Float64=0.0,   # cot(θ); >0 tapers inward going up
     sidewall_z0::Float64=0.0
@@ -130,7 +133,10 @@ function build_test_problem(;
         surface=flag_surface,
         use_damage_model=use_damage,
         γ_damage=γ_damage,
-        E_threshold=E_threshold
+        E_threshold=E_threshold,
+        surface_mode=surface_mode,
+        t_shell=t_shell,
+        ε_grad=ε_grad
     )
 
     # IO Configuration

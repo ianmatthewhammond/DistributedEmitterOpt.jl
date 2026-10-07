@@ -37,6 +37,8 @@ mutable struct Simulation
     dΩ_design::Any
     Ω_raman::Any
     dΩ_raman::Any
+    Ω_substrate::Any   # material below the design layer (nothing if the mesh has no "Substrate" tag)
+    dΩ_substrate::Any
     dS_top::Any
     dS_bottom::Any
     dΓ_source::Any
@@ -137,6 +139,16 @@ function build_simulation(meshfile::String;
     cellmask_r = get_face_mask(sim.labels, "Raman", dimension)
     sim.Ω_raman = Triangulation(sim.model, cellmask_r)
     sim.dΩ_raman = Measure(sim.Ω_raman, degree)
+
+    # Substrate region (material indicator = 1 there; used by the :tv_void surface measure)
+    if "Substrate" in sim.labels.tag_to_name
+        cellmask_s = get_face_mask(sim.labels, "Substrate", dimension)
+        sim.Ω_substrate = Triangulation(sim.model, cellmask_s)
+        sim.dΩ_substrate = Measure(sim.Ω_substrate, degree)
+    else
+        sim.Ω_substrate = nothing
+        sim.dΩ_substrate = nothing
+    end
 
     # Boundaries
     S_top = BoundaryTriangulation(sim.model, tags=["TopZ"])

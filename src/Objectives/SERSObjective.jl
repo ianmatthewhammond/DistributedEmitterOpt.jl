@@ -24,6 +24,37 @@ Base.@kwdef struct SERSObjective <: ObjectiveFunction
     # Integration mode
     volume::Bool = true
     surface::Bool = false
+
+    # Surface measure (only used when surface=true):
+    #   :band    — legacy pt(1−pt) on Ω_design (a 1/β-thin sidewall band; see SurfaceShell.jl docs)
+    #   :tv_void — 2(1−χ)|∇χ_s| over Ω_raman ∪ Ω_design, χ_s = Helmholtz(t_shell)-smoothed material
+    surface_mode::Symbol = :band
+    t_shell::Float64 = 10.0
+    ε_grad::Float64 = 1e-6
+    # :tv_void fails closed when the mesh has no "Substrate" region (the indicator would silently
+    # lose its substrate=1 part). Set false only for a deliberately substrate-free geometry.
+    require_substrate::Bool = true
+    shell_cache::Base.RefValue{Any} = Ref{Any}(nothing)
+
+    function SERSObjective(αₚ, use_damage_model, γ_damage, E_threshold, volume, surface,
+                           surface_mode, t_shell, ε_grad, require_substrate, shell_cache)
+        surface_mode in (:band, :tv_void) ||
+            throw(ArgumentError("SERSObjective: surface_mode must be :band or :tv_void, got $(repr(surface_mode))"))
+        (isfinite(t_shell) && t_shell > 0) ||
+            throw(ArgumentError("SERSObjective: t_shell must be finite and > 0, got $t_shell"))
+        # :tv_void divides by |∇χ_s|_ε to form û; ε_grad = 0 gives 0/0 wherever χ_s is flat (bulk
+        # void, bulk metal), so the regularisation is mandatory there. :band never uses it.
+        if surface_mode == :tv_void
+            (isfinite(ε_grad) && ε_grad > 0) ||
+                throw(ArgumentError("SERSObjective: surface_mode=:tv_void needs ε_grad finite and > 0 " *
+                                    "(û = ∇χ_s/|∇χ_s|_ε is 0/0 in flat regions otherwise), got $ε_grad"))
+        else
+            (isfinite(ε_grad) && ε_grad >= 0) ||
+                throw(ArgumentError("SERSObjective: ε_grad must be finite and >= 0, got $ε_grad"))
+        end
+        new(αₚ, use_damage_model, γ_damage, E_threshold, volume, surface,
+            surface_mode, t_shell, ε_grad, require_substrate, shell_cache)
+    end
 end
 
 # NOTE: The following functions are defined in Physics/SERS.jl and reused here:
@@ -77,8 +108,10 @@ function compute_objective(obj::SERSObjective, pde::MaxwellProblem, fields::Dict
                 g += weight * real(sum(∫(dmg * (integrand - integrand * pt_out))sim_out.dΩ_design))
             end
 
-            if obj.surface
+            if obj.surface && obj.surface_mode == :band
                 g += weight * real(sum(∫(dmg * (pt_out * (integrand - integrand * pt_out)))sim_out.dΩ_design))
+            elseif obj.surface && obj.surface_mode == :tv_void
+                g += weight * shell_objective_pair(obj, dmg, integrand, pt_out, sim, sim_out)
             end
         end
     end
@@ -159,7 +192,7 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
                 end
             end
 
-            if obj.surface
+            if obj.surface && obj.surface_mode == :band
                 bp .+= weight * assemble_vector(sim_in.V) do v
                     ∫(
                         coef_p * (pt_in * ((α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) -
@@ -167,6 +200,22 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
                         (obj.use_damage_model ?
                          pt_in * ((α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) -
                                (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) * pt_in) * (v ⋅ ∂dmg) : 0.0)
+                    )sim_in.dΩ_design
+                end
+            end
+            if obj.surface && obj.surface_mode == :tv_void
+                _shell_check_single_sim(sim, sim_in)
+                _, _, S_r, S_d = shell_weights(obj, pt_in, sim_in)
+                bp .+= weight * assemble_vector(sim_in.V) do v
+                    ∫(
+                        coef_p * (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) * S_r * dmg +
+                        (obj.use_damage_model ?
+                         (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) * S_r * (v ⋅ ∂dmg) : 0.0)
+                    )sim_in.dΩ_raman +
+                    ∫(
+                        coef_p * (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, v, αc1_in, αc2_in)) * S_d * dmg +
+                        (obj.use_damage_model ?
+                         (α̂ₚ² ∘ (Ee_in, Ee_conj_in, Ep, Ep, αc1_in, αc2_in)) * S_d * (v ⋅ ∂dmg) : 0.0)
                     )sim_in.dΩ_design
                 end
             end
@@ -197,10 +246,18 @@ function compute_adjoint_sources(obj::SERSObjective, pde::MaxwellProblem, fields
                     end
                 end
 
-                if obj.surface
+                if obj.surface && obj.surface_mode == :band
                     be .+= weight * assemble_vector(sim_out.V) do v
                         ∫(2.0 * (pt_out * ((α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) -
                                        (α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) * pt_out)) * dmg_out)sim_out.dΩ_design
+                    end
+                end
+                if obj.surface && obj.surface_mode == :tv_void
+                    _shell_check_single_sim(sim, sim_out)
+                    _, _, S_r, S_d = shell_weights(obj, pt_out, sim_out)
+                    be .+= weight * assemble_vector(sim_out.V) do v
+                        ∫(2.0 * (α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) * S_r * dmg_out)sim_out.dΩ_raman +
+                        ∫(2.0 * (α̂ₚ² ∘ (Ee, v, Ep_out, Ep_out, αc1_out, αc2_out)) * S_d * dmg_out)sim_out.dΩ_design
                     end
                 end
             end
@@ -226,8 +283,9 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
 
     ∂g_∂pf = zeros(Float64, num_free_dofs(space))
     sim_base = default_sim(sim)
+    pair_terms = obj.volume || (obj.surface && obj.surface_mode == :band)
 
-    for fc_in in inputs
+    for fc_in in (pair_terms ? inputs : FieldConfig[])
         key_in = cache_key(fc_in)
         haskey(fields, key_in) || continue
         sim_in = sim_for(sim, fc_in)
@@ -260,7 +318,7 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
                 if obj.volume
                     term += dmg * (-real(integrand))
                 end
-                if obj.surface
+                if obj.surface && obj.surface_mode == :band
                     term += dmg * real(integrand - 2 * integrand * pt_out)
                 end
                 ∫(dpt_dpf_field(v, pf_out, control, sim_out.Ω_design) *
@@ -268,6 +326,17 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
             end
 
             ∂g_∂pf .+= weight .* contrib
+        end
+    end
+
+    if obj.surface && obj.surface_mode == :tv_void
+        dens = shell_explicit_density(obj, pde, fields, pt, sim)
+        if dens !== nothing
+            ∇pf0 = ∇(pf)
+            ∂g_∂pf .+= assemble_vector(sim_base.Pf) do v
+                ∫(dpt_dpf_field(v, pf, control, sim_base.Ω_design) *
+                  dens)sim_base.dΩ_design
+            end
         end
     end
 
@@ -290,8 +359,9 @@ function explicit_sensitivity_pt(obj::SERSObjective, pde::MaxwellProblem, fields
 
     ∂g_∂pt = zeros(Float64, num_free_dofs(space))
     sim_base = default_sim(sim)
+    pair_terms = obj.volume || (obj.surface && obj.surface_mode == :band)
 
-    for fc_in in inputs
+    for fc_in in (pair_terms ? inputs : FieldConfig[])
         key_in = cache_key(fc_in)
         haskey(fields, key_in) || continue
         sim_in = sim_for(sim, fc_in)
@@ -322,13 +392,22 @@ function explicit_sensitivity_pt(obj::SERSObjective, pde::MaxwellProblem, fields
                 if obj.volume
                     term += dmg * (-real(integrand))
                 end
-                if obj.surface
+                if obj.surface && obj.surface_mode == :band
                     term += dmg * real(integrand - 2 * integrand * pt_out)
                 end
                 ∫(v * term)sim_out.dΩ_design
             end
 
             ∂g_∂pt .+= weight .* contrib
+        end
+    end
+
+    if obj.surface && obj.surface_mode == :tv_void
+        dens = shell_explicit_density(obj, pde, fields, pt, sim)
+        if dens !== nothing
+            ∂g_∂pt .+= assemble_vector(sim_base.Pf) do v
+                ∫(v * dens)sim_base.dΩ_design
+            end
         end
     end
 
@@ -354,8 +433,9 @@ function explicit_sensitivity_pt_grid!(out::Vector{Float64},
     inputs = pde.inputs
     outputs = effective_outputs(pde)
     sim_base = default_sim(sim)
+    pair_terms = obj.volume || (obj.surface && obj.surface_mode == :band)
 
-    for fc_in in inputs
+    for fc_in in (pair_terms ? inputs : FieldConfig[])
         key_in = cache_key(fc_in)
         haskey(fields, key_in) || continue
         sim_in = sim_for(sim, fc_in)
@@ -383,13 +463,18 @@ function explicit_sensitivity_pt_grid!(out::Vector{Float64},
             if obj.volume
                 term += dmg * (-real(integrand))
             end
-            if obj.surface
+            if obj.surface && obj.surface_mode == :band
                 term += dmg * real(integrand - 2 * integrand * pt_out)
             end
 
             density = weight * term
             accumulate_density_to_grid!(out, sim_base.grid, sim_out.dΩ_design, density)
         end
+    end
+
+    if obj.surface && obj.surface_mode == :tv_void
+        dens = shell_explicit_density(obj, pde, fields, pt, sim)
+        dens === nothing || accumulate_density_to_grid!(out, sim_base.grid, sim_base.dΩ_design, dens)
     end
 
     return out

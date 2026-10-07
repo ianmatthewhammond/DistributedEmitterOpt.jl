@@ -71,6 +71,7 @@ include("Physics/EigenSolver.jl")
 # ---------------------------------------------------------------------------
 
 include("Objectives/SERSObjective.jl")
+include("Objectives/SurfaceShell.jl")
 include("Objectives/EigenObjective.jl")
 
 # ---------------------------------------------------------------------------

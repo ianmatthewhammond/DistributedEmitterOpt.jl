@@ -40,6 +40,15 @@ Base.show(io::IO, prob::OptimizationProblem) =
 # ---------------------------------------------------------------------------
 
 """
+    validate_objective(objective, sim)
+
+Hook for objective-specific construction-time checks against the simulation (mesh regions,
+single-sim restrictions). The default accepts everything; `SERSObjective` overrides it
+(see Objectives/SurfaceShell.jl).
+"""
+validate_objective(::ObjectiveFunction, sim) = nothing
+
+"""
     OptimizationProblem(pde, objective, sim, solver; kwargs...)
 
 Build an optimization problem from a PDE definition and objective.
@@ -64,6 +73,7 @@ function OptimizationProblem(
     control::Control=Control(),
     root::String="./data/"
 )
+    validate_objective(objective, sim)
     pool = SolverCachePool(solver)
 
     np = sim.np
@@ -97,6 +107,7 @@ function OptimizationProblem(
     control::Control=Control(),
     root::String="./data/"
 )
+    validate_objective(objective, sim)
     pool = SolverPoolBundle(solver, sim)
 
     np = default_sim(sim).np

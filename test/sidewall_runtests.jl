@@ -1,7 +1,7 @@
 using Test
 
 @testset "Sidewall optimization" begin
-    for file in ("sidewall_tests.jl",)
+    for file in ("sidewall_tests.jl", "sidewall_tvvoid_tests.jl")
         # Separate namespaces keep test fixtures and constants independent.
         @testset "$file" begin
             sandbox = Module(gensym(:SidewallTests))
