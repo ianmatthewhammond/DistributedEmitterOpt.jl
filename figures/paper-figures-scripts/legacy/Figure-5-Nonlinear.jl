@@ -1,6 +1,6 @@
 # # --- Imports ---
 # using Pkg
-# Pkg.activate("<legacy-home>/GitHub/Emitter3DTopOpt") # Optional: Activate your project environment
+# Pkg.activate(get(ENV, "LEGACY_EMITTER_PROJECT", joinpath(homedir(), "GitHub", "Emitter3DTopOpt"))) # Optional: Activate your project environment
 # # using Revise # Optional: For interactive development
 
 # using CairoMakie

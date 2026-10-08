@@ -1,5 +1,5 @@
 using Pkg;
-Pkg.activate("<legacy-home>/GitHub/Emitter3DTopOpt"); # Adjust path if needed
+Pkg.activate(get(ENV, "LEGACY_EMITTER_PROJECT", joinpath(homedir(), "GitHub", "Emitter3DTopOpt"))); # Adjust path if needed
 include("load_data.jl")
 using Revise
 import Emitter3DTopOpt as e3 # No longer explicitly needed for plotting functions provided here

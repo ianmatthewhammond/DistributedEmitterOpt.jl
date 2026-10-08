@@ -260,12 +260,12 @@ def main(**kwargs):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--vtufile", type=str, default="<legacy-home>/GitHub/Emitter3DTopOpt/design.vtu")
+parser.add_argument("--vtufile", type=str, default="design.vtu")
 parser.add_argument("--L", type=float, default=400)
 parser.add_argument("--W", type=float, default=400)
 parser.add_argument("--Nrow", type=int, default=1)
 parser.add_argument("--Ncol", type=int, default=None)
-parser.add_argument("--savepath", type=str, default="<legacy-home>/GitHub/Emitter3DTopOpt/design.png")
+parser.add_argument("--savepath", type=str, default="design.png")
 parser.add_argument("--orientation", type=str, default="mz")
 args = parser.parse_args()
 if args.Ncol is None:

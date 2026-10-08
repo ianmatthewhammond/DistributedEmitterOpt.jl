@@ -1,5 +1,5 @@
 #using Pkg # Comment out if activating externally
-using Pkg; Pkg.activate("<legacy-home>/GitHub/Emitter3DTopOpt") # Added activation
+using Pkg; Pkg.activate(get(ENV, "LEGACY_EMITTER_PROJECT", joinpath(homedir(), "GitHub", "Emitter3DTopOpt"))) # Added activation
 # Ensure necessary packages are installed
 # Pkg.add(["PyCall", "JLD2", "YAML", "Logging"]) # Uncomment if needed
 
