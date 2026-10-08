@@ -12,16 +12,32 @@ inequality constraints `g(p) ≤ 0`.
 Library resolution order:
   1. `ENV["JULIA_NLOPT_MMACCSA_LIB"]`
   2. `~/GitHub/NLopt-MMA-CCSA/build/libmmaccsa.<ext>`
-  3. `~/github/NLopt-MMA-CCSA/build/libmmaccsa.<ext>`  (engaging convention)
+  3. `~/github/NLopt-MMA-CCSA/build/libmmaccsa.<ext>`  (lowercase checkout directory)
 """
 module MmaccsaBackend
 
 using Libdl
 
 export MmaState, minimize!, save_state, load_state, free_state!,
-       library_path, library_available
+       library_path, library_available, state_header, state_dims,
+       dual_algorithm_supported
 
 const NLOPT_LD_LBFGS = Cint(11)
+const NLOPT_LD_MMA = Cint(24)
+const NLOPT_INVALID_ARGS = Cint(-2)
+
+"""
+Dual-subproblem solvers understood by the library. `:mma` is what upstream NLopt uses
+(its default `dual_algorithm`); `:lbfgs` is Luksan PLIS, which can fail with
+`NLOPT_FAILURE` when its line search stalls on a converged but badly conditioned dual.
+"""
+const DUAL_ALGORITHMS = (mma=NLOPT_LD_MMA, lbfgs=NLOPT_LD_LBFGS)
+
+function _dual_code(dual_algorithm::Symbol)
+    haskey(DUAL_ALGORITHMS, dual_algorithm) ||
+        throw(ArgumentError("dual_algorithm must be :mma or :lbfgs (got :$dual_algorithm)"))
+    return DUAL_ALGORITHMS[dual_algorithm]
+end
 
 const _libpath = Ref{String}("")
 
@@ -30,7 +46,12 @@ function library_path()::String
         ext = "." * Libdl.dlext
         candidates = String[]
         env = get(ENV, "JULIA_NLOPT_MMACCSA_LIB", "")
-        !isempty(env) && push!(candidates, env)
+        if !isempty(env)
+            isfile(env) || error("JULIA_NLOPT_MMACCSA_LIB does not name an existing shared library: $env. " *
+                                 "Build NLopt-MMA-CCSA and set this variable to libmmaccsa.")
+            _libpath[] = env
+            return env
+        end
         push!(candidates, joinpath(homedir(), "GitHub", "NLopt-MMA-CCSA", "build", "libmmaccsa" * ext))
         push!(candidates, joinpath(homedir(), "github", "NLopt-MMA-CCSA", "build", "libmmaccsa" * ext))
         for c in candidates
@@ -97,6 +118,10 @@ mutable struct ConstraintBox
     g::Function   # signature: (x::Vector{Float64}, grad::Vector{Float64}) -> Float64
 end
 
+mutable struct CheckpointBox
+    callback::Function # signature: (x::Vector{Float64}, minf::Float64, nevals::Int, k::Int) -> nothing
+end
+
 function _objective_trampoline(n::Cuint, x_ptr::Ptr{Cdouble}, grad_ptr::Ptr{Cdouble},
                                data::Ptr{Cvoid})::Cdouble
     box = unsafe_pointer_to_objref(data)::ObjectiveBox
@@ -113,14 +138,26 @@ function _constraint_trampoline(n::Cuint, x_ptr::Ptr{Cdouble}, grad_ptr::Ptr{Cdo
     return box.g(x, grad)::Float64
 end
 
+function _checkpoint_trampoline(n::Cuint, x_ptr::Ptr{Cdouble}, minf::Cdouble,
+                                nevals::Cint, k::Cuint, data::Ptr{Cvoid})::Cvoid
+    data == C_NULL && return nothing
+    box = unsafe_pointer_to_objref(data)::CheckpointBox
+    x = unsafe_wrap(Array, x_ptr, n)
+    box.callback(x, Float64(minf), Int(nevals), Int(k))
+    return nothing
+end
+
 const OBJ_CFN = Ref{Ptr{Cvoid}}(C_NULL)
 const CON_CFN = Ref{Ptr{Cvoid}}(C_NULL)
+const CHECKPOINT_CFN = Ref{Ptr{Cvoid}}(C_NULL)
 
 function __init__()
     OBJ_CFN[] = @cfunction(_objective_trampoline, Cdouble,
                            (Cuint, Ptr{Cdouble}, Ptr{Cdouble}, Ptr{Cvoid}))
     CON_CFN[] = @cfunction(_constraint_trampoline, Cdouble,
                            (Cuint, Ptr{Cdouble}, Ptr{Cdouble}, Ptr{Cvoid}))
+    CHECKPOINT_CFN[] = @cfunction(_checkpoint_trampoline, Cvoid,
+                                  (Cuint, Ptr{Cdouble}, Cdouble, Cint, Cuint, Ptr{Cvoid}))
 end
 
 # ---------------------------------------------------------------------------
@@ -170,6 +207,105 @@ function load_state(path::AbstractString)::MmaState
 end
 
 # ---------------------------------------------------------------------------
+# Serialized-state header (read WITHOUT calling C)
+# ---------------------------------------------------------------------------
+
+# Mirror of `mma_state_serial_header` in NLopt-MMA-CCSA src/mma_state.c
+# (MMA_STATE_SERIAL_VERSION 1). Julia lays out an isbits struct with the C ABI's
+# alignment, so field offsets match on x86_64 and aarch64 (80 bytes).
+struct MmaStateSerialHeader
+    magic::Cuint
+    version::Cuint
+    state_magic::Cuint
+    algorithm::Cuint
+    n::Cuint
+    m::Cuint
+    workspace_len::Csize_t
+    rho::Cdouble
+    k::Cuint
+    infeasibility::Cdouble
+    feasible::Cint
+    fcur::Cdouble
+    minf::Cdouble
+end
+
+const MMA_STATE_SERIAL_MAGIC = 0x4d4d4153
+const MMA_STATE_SERIAL_VERSION = 0x00000001
+
+"""
+    state_header(path) -> MmaStateSerialHeader
+
+Read the header of a serialized MMA/CCSA state file without handing it to C.
+
+Why this exists: `mma_state_restore` demands that the saved `n` (variables) and
+`m` (constraints) equal the current problem's, and on a mismatch the C optimizer
+returns a negative code — which `minimize!` passes back WITHOUT throwing. A caller
+that does not check `ret` then gets a silent no-op optimization. Read the header
+first and refuse the mismatch by name (see `state_dims`).
+"""
+function state_header(path::AbstractString)::MmaStateSerialHeader
+    nb = sizeof(MmaStateSerialHeader)
+    bytes = read(path)
+    length(bytes) >= nb ||
+        throw(ArgumentError("MMA state file $path is $(length(bytes)) bytes, shorter than its $nb-byte header"))
+    h = reinterpret(MmaStateSerialHeader, bytes[1:nb])[1]
+    h.magic == MMA_STATE_SERIAL_MAGIC ||
+        throw(ArgumentError("MMA state file $path has bad magic 0x$(string(h.magic, base=16)) (expected 0x$(string(MMA_STATE_SERIAL_MAGIC, base=16)))"))
+    h.version == MMA_STATE_SERIAL_VERSION ||
+        throw(ArgumentError("MMA state file $path has serial version $(h.version); this reader knows $(MMA_STATE_SERIAL_VERSION)"))
+    return h
+end
+
+"""
+    state_dims(path) -> (n, m)
+
+Number of variables and constraints a serialized state was written for.
+"""
+function state_dims(path::AbstractString)
+    h = state_header(path)
+    return (Int(h.n), Int(h.m))
+end
+
+# ---------------------------------------------------------------------------
+# Dual-solver capability check
+# ---------------------------------------------------------------------------
+
+_probe_dual_objective(n::Cuint, x::Ptr{Cdouble}, grad::Ptr{Cdouble}, ::Ptr{Cvoid})::Cdouble =
+    (grad != C_NULL && unsafe_store!(grad, 2 * unsafe_load(x)); unsafe_load(x)^2)
+
+const _dual_support = Dict{Tuple{String,Symbol},Bool}()
+
+"""
+    dual_algorithm_supported(dual_algorithm) -> Bool
+
+Whether the loaded library can solve the dual subproblem with `dual_algorithm`.
+Builds of the library that predate the MMA dual reject `NLOPT_LD_MMA` with
+`NLOPT_INVALID_ARGS`; this asks the library directly, on a one-variable problem,
+instead of finding out at the first dual solve of a long run.
+"""
+function dual_algorithm_supported(dual_algorithm::Symbol)::Bool
+    code = _dual_code(dual_algorithm)
+    lib = library_path()
+    return get!(_dual_support, (lib, dual_algorithm)) do
+        opt = ccall((:nlopt_create, library_path()), Ptr{Cvoid}, (Cint, Cuint), code, 1)
+        opt == C_NULL && error("nlopt_create failed in $lib")
+        try
+            f = @cfunction(_probe_dual_objective, Cdouble, (Cuint, Ptr{Cdouble}, Ptr{Cdouble}, Ptr{Cvoid}))
+            ccall((:nlopt_set_min_objective, library_path()), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), opt, f, C_NULL)
+            ccall((:nlopt_set_lower_bounds, library_path()), Cint, (Ptr{Cvoid}, Ptr{Cdouble}), opt, [-1.0])
+            ccall((:nlopt_set_upper_bounds, library_path()), Cint, (Ptr{Cvoid}, Ptr{Cdouble}), opt, [1.0])
+            x = [0.5]
+            minf = Ref{Cdouble}(0.0)
+            ret = ccall((:nlopt_optimize_limited, library_path()), Cint,
+                        (Ptr{Cvoid}, Ptr{Cdouble}, Ref{Cdouble}, Cint, Cdouble), opt, x, minf, 50, 0.0)
+            ret != NLOPT_INVALID_ARGS
+        finally
+            ccall((:nlopt_destroy, library_path()), Cvoid, (Ptr{Cvoid},), opt)
+        end
+    end
+end
+
+# ---------------------------------------------------------------------------
 # Top-level minimize
 # ---------------------------------------------------------------------------
 
@@ -189,7 +325,15 @@ Minimize `f(x, grad) -> Float64` over `p` with bounds `[lb, ub]`.
 - `constraints`: vector of `(g, tol)` pairs, each enforced as `g(p) ≤ 0`.
 - `state`: optional `MmaState` to feed/receive checkpoint data. If the state
   is non-null on entry, the optimizer resumes from it; on exit, the state
-  reflects the final iteration.
+  holds the live C workspace. Serialize it inside `checkpoint_callback`, paired
+  with the callback's point and evaluation count: a hard evaluation-limit exit
+  can leave uncommitted trial data in the workspace after the last callback.
+- `checkpoint_callback`: optional callback invoked only after the C optimizer
+  has saved a committed checkpoint state.
+- `dual_algorithm`: solver for the CCSA dual subproblem, `:mma` (default, as in
+  upstream NLopt) or `:lbfgs`. The dual carries no state between outer iterations
+  beyond the dual variables, which live in the checkpoint state, so a state saved
+  under one dual solver resumes under the other.
 """
 function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
                    lb::Vector{Float64},
@@ -204,9 +348,15 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
                    inner_maxeval::Integer = 0,
                    verbose::Integer = 0,
                    rho_init::Float64 = 1.0,
-                   sigma_init::Union{Nothing,Vector{Float64}} = nothing)
+                   sigma_init::Union{Nothing,Vector{Float64}} = nothing,
+                   checkpoint_callback::Union{Nothing,Function} = nothing,
+                   dual_algorithm::Symbol = :mma)
 
     n = length(p)
+    dual_code = _dual_code(dual_algorithm)
+    dual_algorithm_supported(dual_algorithm) ||
+        error("the NLopt-MMA-CCSA library at $(library_path()) does not support dual_algorithm=:$dual_algorithm; " *
+              "rebuild it from a version with the MMA dual, or pass dual_algorithm=:lbfgs")
     length(lb) == n || throw(ArgumentError("lb length $(length(lb)) != p length $n"))
     length(ub) == n || throw(ArgumentError("ub length $(length(ub)) != p length $n"))
 
@@ -235,10 +385,13 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
     ))
 
     dual_opt = ccall((:nlopt_create, library_path()), Ptr{Cvoid},
-                     (Cint, Cuint), NLOPT_LD_LBFGS, m)
+                     (Cint, Cuint), dual_code, m)
 
     state_ref = state === nothing ? Ref{Ptr{Cvoid}}(C_NULL) : state.ref
     minf = Ref{Cdouble}(0.0)
+    checkpoint_box = checkpoint_callback === nothing ? nothing : CheckpointBox(checkpoint_callback)
+    checkpoint_ptr = checkpoint_box === nothing ? Ptr{Cvoid}(C_NULL) : pointer_from_objref(checkpoint_box)
+    checkpoint_cfn = checkpoint_box === nothing ? Ptr{Cvoid}(C_NULL) : CHECKPOINT_CFN[]
 
     sigma_buf = sigma_init === nothing ? Float64[] : copy(sigma_init)
     sigma_ptr = isempty(sigma_buf) ? Ptr{Cdouble}(C_NULL) : pointer(sigma_buf)
@@ -247,7 +400,7 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
     end
 
     ret = try
-        GC.@preserve obj_box con_boxes con_tols nlopt_constraints lb ub p stop nevals force_stop sigma_buf begin
+        GC.@preserve obj_box con_boxes con_tols nlopt_constraints lb ub p stop nevals force_stop sigma_buf checkpoint_box begin
             if algorithm === :mma
                 ccall((:mma_minimize, library_path()), Cint,
                     (Cuint, Ptr{Cvoid}, Ptr{Cvoid},
@@ -255,14 +408,15 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
                      Ptr{Cdouble}, Ptr{Cdouble},
                      Ptr{Cdouble}, Ptr{Cdouble},
                      Ref{nlopt_stopping},
-                     Ptr{Cvoid}, Cint, Cuint, Cdouble, Ptr{Cdouble}, Ref{Ptr{Cvoid}}),
+                     Ptr{Cvoid}, Cint, Cuint, Cdouble, Ptr{Cdouble}, Ref{Ptr{Cvoid}},
+                     Ptr{Cvoid}, Ptr{Cvoid}),
                     Cuint(n), OBJ_CFN[], pointer_from_objref(obj_box),
                     m, fc_ptr,
                     pointer(lb), pointer(ub),
                     pointer(p), minf,
                     stop,
                     dual_opt, Cint(inner_maxeval), Cuint(verbose), rho_init,
-                    sigma_ptr, state_ref)
+                    sigma_ptr, state_ref, checkpoint_cfn, checkpoint_ptr)
             elseif algorithm === :ccsaq
                 ccall((:ccsa_quadratic_minimize, library_path()), Cint,
                     (Cuint, Ptr{Cvoid}, Ptr{Cvoid},
@@ -271,7 +425,8 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
                      Ptr{Cdouble}, Ptr{Cdouble},
                      Ptr{Cdouble}, Ptr{Cdouble},
                      Ref{nlopt_stopping},
-                     Ptr{Cvoid}, Cint, Cuint, Cdouble, Ptr{Cdouble}, Ref{Ptr{Cvoid}}),
+                     Ptr{Cvoid}, Cint, Cuint, Cdouble, Ptr{Cdouble}, Ref{Ptr{Cvoid}},
+                     Ptr{Cvoid}, Ptr{Cvoid}),
                     Cuint(n), OBJ_CFN[], pointer_from_objref(obj_box),
                     m, fc_ptr,
                     C_NULL,
@@ -279,7 +434,7 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
                     pointer(p), minf,
                     stop,
                     dual_opt, Cint(inner_maxeval), Cuint(verbose), rho_init,
-                    sigma_ptr, state_ref)
+                    sigma_ptr, state_ref, checkpoint_cfn, checkpoint_ptr)
             else
                 error("unknown standalone algorithm: $algorithm (use :mma or :ccsaq)")
             end

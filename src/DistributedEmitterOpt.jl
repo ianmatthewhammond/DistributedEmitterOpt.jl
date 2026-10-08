@@ -108,6 +108,8 @@ include("Optimization/MmaccsaBackend.jl")
 include("Optimization/Optimizer.jl")
 include("Optimization/GradientCoordinator.jl")
 include("Optimization/GradientCoordinatorEigen.jl")
+include("Optimization/RobustSidewall.jl")
+include("Optimization/EpigraphSidewall.jl")
 
 # ---------------------------------------------------------------------------
 # Analysis
@@ -166,6 +168,7 @@ export filter_helmholtz!, filter_helmholtz_adjoint!
 export project_grid, project_grid_adjoint
 export project_fe, project_ssp
 export smooth_project_sidewall, sidewall_partials, dpt_dpf_sidewall, dpt_dpf_field
+export sidewall_samples, ks_softmin, robust_sidewall_objective!, robust_sidewall_samples!
 export christiansen_ε, ∂christiansen_ε
 export glc_solid, glc_void, glc_solid_fe, glc_void_fe
 

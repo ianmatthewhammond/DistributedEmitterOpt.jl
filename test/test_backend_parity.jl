@@ -23,9 +23,9 @@ end
 # Both backends are configured to be running the same algorithm:
 #   - identical sigma_init (NLopt's default initial-step heuristic, computed
 #     in Julia and passed explicitly into both)
-#   - identical dual algorithm: NLOPT_LD_LBFGS = Luksan PLIS in both
-#     (NLopt's MMA defaults to recursive MMA-on-MMA for the dual; we
-#     override via params["dual_algorithm"])
+#   - identical dual algorithm: NLOPT_LD_MMA (recursive MMA-on-MMA) in both,
+#     NLopt's default and the standalone's default; the helper also sets
+#     params["dual_algorithm"] explicitly
 #   - mma.c / ccsa_quadratic.c are the same source
 #
 # Most cases match to 1e-10 (effectively bit-identical). One case
@@ -51,10 +51,8 @@ end
 # ---------------------------------------------------------------------------
 # Both backends run the same algorithm (matched sigma_init, matched dual
 # solver). On converged problems, results are bit-identical. On non-
-# converged problems the standalone finishes the current outer iteration
-# before honoring maxeval (for checkpoint correctness), so it may do a few
-# extra evals vs NLopt which exits mid-inner-loop. This causes a small
-# trajectory divergence proportional to one outer iteration's improvement.
+# converged problems, finite iteration budgets can expose small numerical
+# differences accumulated along the trajectory.
 
 const CONVERGED_CASES = ("mccormick", "quadratic_constrained")
 
@@ -84,11 +82,10 @@ end
 # ---------------------------------------------------------------------------
 # Standalone checkpoint roundtrip — all cases bit-identical
 # ---------------------------------------------------------------------------
-# The standalone only exits at outer-iteration boundaries (maxeval is
-# checked at the top of the outer loop, not mid-inner-loop). This means
-# checkpoint-resume always starts from a clean state and reproduces the
-# uninterrupted trajectory exactly. The test helper accounts for the
-# possible eval overrun by giving phase 2 (total - actual_phase1) budget.
+# Save only at a committed callback, pairing the serialized state with the
+# callback's point and evaluation count. A mid-inner-loop maxeval exit may
+# leave later trial evaluations uncommitted; resume replays them from that
+# callback snapshot, as the optimizer's periodic checkpoints do.
 
 const CHECKPOINT_CASES = ("rosenbrock", "mccormick", "quadratic_constrained")
 

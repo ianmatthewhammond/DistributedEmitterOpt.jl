@@ -146,11 +146,10 @@ function run_nlopt(case::ParityCase, algorithm::Symbol)
     opt.maxeval = case.maxeval
     opt.initial_step = nlopt_default_step(case.lb, case.ub, case.x0)
 
-    # NLopt's MMA/CCSAQ default to NLOPT_LD_MMA for the dual subproblem
-    # (recursive MMA-on-MMA), but the standalone hard-codes NLOPT_LD_LBFGS
-    # (Luksan PLIS). Force NLopt to use LBFGS for the dual so the two
-    # backends are running the same algorithm end-to-end.
-    opt.params["dual_algorithm"] = Int(NLopt.LD_LBFGS)
+    # Both backends solve the dual subproblem with MMA (recursive MMA-on-MMA):
+    # it is NLopt's default and the standalone's default dual_algorithm. Set it
+    # explicitly so the two backends run the same algorithm end-to-end.
+    opt.params["dual_algorithm"] = Int(NLopt.LD_MMA)
 
     opt.min_objective = case.f
     for (g, tol) in case.constraints
@@ -177,26 +176,27 @@ function run_stdlib_checkpoint(case::ParityCase, algorithm::Symbol)
     target_split = max(1, div(2 * case.maxeval, 5))
     sigma = nlopt_default_step(case.lb, case.ub, case.x0)
 
-    # Phase 1: run until target_split evals. The algorithm finishes the
-    # current outer iteration, so actual evals may slightly exceed target.
-    evals_phase1 = Ref(0)
-    f_phase1 = function(x, grad)
-        evals_phase1[] += 1
-        return case.f(x, grad)
-    end
-
+    # Persist inside the committed-state callback. A hard maxeval exit can
+    # interrupt an inner trial, after the last coherent checkpoint. Replay
+    # those uncommitted evaluations using the committed callback's count.
     state = MmaState()
     p = copy(case.x0)
-    minimize!(algorithm, f_phase1, p;
-        lb=case.lb, ub=case.ub, maxeval=target_split,
-        constraints=case.constraints, sigma_init=sigma, state=state)
-
     path = tempname() * ".mma_state"
-    save_state(path, state)
+    committed_evals = Ref(0)
+    committed_p = Ref(copy(p))
+    checkpoint = (x, fmin, nevals, k) -> begin
+        save_state(path, state)
+        committed_evals[] = nevals
+        committed_p[] = copy(x)
+    end
+    minimize!(algorithm, case.f, p;
+        lb=case.lb, ub=case.ub, maxeval=target_split,
+        constraints=case.constraints, sigma_init=sigma, state=state,
+        checkpoint_callback=checkpoint)
     free_state!(state)
-
-    # Phase 2: remaining budget = total - actual phase 1 evals.
-    remaining = case.maxeval - evals_phase1[]
+    @assert committed_evals[] > 0
+    p = committed_p[]
+    remaining = case.maxeval - committed_evals[]
     loaded = load_state(path)
     ret, fmin, p_opt = minimize!(algorithm, case.f, p;
         lb=case.lb, ub=case.ub, maxeval=remaining,
@@ -205,7 +205,7 @@ function run_stdlib_checkpoint(case::ParityCase, algorithm::Symbol)
     rm(path; force=true)
 
     return (; backend="stdlib", case=case.name, algorithm=String(algorithm), mode="checkpoint",
-            ret=Int(ret), fmin=fmin, p=p_opt, nevals=evals_phase1[] + remaining)
+            ret=Int(ret), fmin=fmin, p=p_opt, nevals=committed_evals[] + remaining)
 end
 
 # ---------------------------------------------------------------------------

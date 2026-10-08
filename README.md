@@ -49,6 +49,7 @@ g_opt, p_opt = optimize!(prob; max_iter=100)
 - Multi-wavelength and multi-polarization support
 - Anisotropic Raman polarizability tensors
 - Linewidth constraints via Zygote AD
+- [Linear sidewalls and worst-case KS/epigraph optimization](docs/sidewalls.md)
 
 ## Documentation
 
