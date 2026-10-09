@@ -67,7 +67,7 @@ include(joinpath(@__DIR__, "gradient_common.jl"))
         )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
-        @test rel_err < 1e-2
+        @test rel_err < TOL_RELATIVE
     end
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -107,7 +107,7 @@ include(joinpath(@__DIR__, "gradient_common.jl"))
         )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0)
-        @test rel_err < 1e-2
+        @test rel_err < TOL_RELATIVE
     end
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -151,7 +151,7 @@ include(joinpath(@__DIR__, "gradient_common.jl"))
         )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
         rel_err, _ = test_gradient(prob, p0; δ=1e-8)
-        @test rel_err < 1e-2
+        @test rel_err < TOL_RELATIVE
     end
 end
 

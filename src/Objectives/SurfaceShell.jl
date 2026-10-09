@@ -160,7 +160,9 @@ function shell_weights(obj, pt, sim0)
 end
 
 function _shell_check_single_sim(sim, sim_out)
-    sim_out === default_sim(sim) || error("SERSObjective surface_mode=:tv_void requires a single simulation (sim_out === default_sim); multi-mesh bundles are not supported yet")
+    sim0 = default_sim(sim)
+    (sim_out === sim0 || (sim_out.model === sim0.model && sim_out.Pf === sim0.Pf)) ||
+        error("SERSObjective surface_mode=:tv_void requires a shared model and scalar space; multi-mesh bundles are not supported yet")
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
