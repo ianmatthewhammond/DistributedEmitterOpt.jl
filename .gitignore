@@ -25,3 +25,4 @@ Thumbs.db
 
 # Debugging junk
 scripts/experiments/debug
+*.claude

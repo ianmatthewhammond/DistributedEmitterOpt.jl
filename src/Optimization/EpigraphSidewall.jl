@@ -16,13 +16,12 @@ its own constraint and keeps the objective linear:
 `T = min_i g_i(p₀)/g_norm` is fixed for a stage (and saved in the checkpoint), so τ
 is O(1) and every constraint is O(1).
 
-EVALUATION ORDER, which the cache relies on (NLopt-MMA-CCSA `ccsa_quadratic.c`
-@ 7372741): at every point CCSA evaluates the objective first and then every
-constraint at the SAME x (start `:383,:390-395`; every inner trial `:500,:507-513`;
-a resume evaluates nothing, `:355-366`). So the expensive solves (one forward +
-adjoint per sample) run in the objective callback, and the constraints read a cache.
-`nevals` counts objective calls only, so eval counting, `maxeval`, the NEVAL gate and
-checkpoints keep their meaning.
+EVALUATION ORDER, which the cache relies on: the standalone CCSA implementation
+in NLopt-MMA-CCSA evaluates the objective first and then every constraint at the
+same point. Resuming a saved state does not evaluate the callbacks immediately.
+The expensive solves (one forward + adjoint per sample) run in the objective
+callback, and the constraints read a cache. `nevals` counts objective calls only,
+so evaluation limits and checkpoints use that count.
 
 THE CACHE IS KEYED ON THE VALUES OF p, never on object identity. The C side reuses
 one x buffer for every trial point, so the key is a COPY of `x[1:np]` compared with

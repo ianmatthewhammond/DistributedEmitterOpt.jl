@@ -36,7 +36,7 @@ end
     @test !isempty(commits)
     @test h.minf == commits[end][1]
     @test Int(h.k) == commits[end][2]
-    @test h.minf != fmin     # measured 2026-09-21: 1.116e-3 committed vs 1.066e-4 returned
+    @test h.minf != fmin     # the committed objective differs from the best objective returned
 
     # a state for n = 4, m = 0 reads back as such (the reader is not returning constants)
     st4 = MB.MmaState()

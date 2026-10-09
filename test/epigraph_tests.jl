@@ -9,7 +9,7 @@
 #   4. cache accounting through optimize!: solves = nsamples x misses <= nsamples x nevals,
 #      every constraint call hits; NEGATIVE CONTROL: the uncached count (cache off) is
 #      nsamples + nsamples(1+nsamples) x nevals, on an identical trajectory;
-#   5. the stage-D path (linewidth constraints on, m = nsamples + 2) runs from a feasible
+#   5. the constrained path (linewidth constraints on, m = nsamples + 2) runs from a feasible
 #      start and ends feasible, and a constraint_scale that is not 1/b1 is refused by name;
 #   6. a real negative CCSA return (strongly violated linewidth start) throws, pinned message.
 using Test, DistributedEmitterOpt

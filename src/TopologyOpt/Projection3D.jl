@@ -277,27 +277,9 @@ end
 # `s = cot(θ)` for a sidewall θ degrees from horizontal; s > 0 tapers inward going
 # up (the ordinary etch profile), s < 0 is re-entrant (lift-off-like).
 #
-# NOTE ON THE HESSIAN TERM (SSP1 here, SSP2 in CutSSP — the difference is FE order).
-# CutSSP's SSP2 uses g_τ = √(|∇ρ̃|² + R²‖Hρ̃‖²_F + τ²) to stay conditioned at saddle
-# points, and it can, because its filtered field is P2 (CutSSP raman.jl:276 picks
-# order 2 whenever SSP is on) and it recovers ∇ρ̃ and Hρ̃ by L2 projection onto P1
-# vector/tensor spaces (raman.jl:305-318, filter.jl:98-99), with hess_mass' for the
-# adjoint and DSP_dHpf closing the chain.
-#
-# DEO's `sim.Pf` is Lagrangian order 1 (Simulation.jl:122), so ∇∇ρ̃ ≡ 0 elementwise
-# and that projection would return zero. The Hessian term is therefore unavailable
-# AT THIS FE ORDER, not unavailable in principle: making DEO P2 like CutSSP would
-# supply it, at the cost of moving every production number.
-#
-# Sidewalls are indifferent to this. The construction is written in terms of g_τ;
-# today g_τ = |∇ρ̃| on the mesh, and a P2 DEO would pick up the Hessian term by
-# changing one expression. (The standalone prototype in scripts/experiments does
-# both, since on a Cartesian grid the Hessian is a finite-difference stencil.)
-#
-# Inherited caveat: DEO uses ∇(pf) of a P1 field directly, which is elementwise
-# constant and discontinuous across faces, where CutSSP L2-projects it to a
-# continuous space. The wall position is proportional to |∇ρ̃|, so it inherits that
-# discontinuity — small element-to-element jumps in the tilted wall.
+# The filtered density uses a first-order finite-element space; this projection
+# uses its gradient and omits a Hessian term. A higher-order filter space with
+# a matching derivative could support a Hessian-regularized transition band.
 
 """
     sidewall_shift(norm∇ρ̃, z; slope, z0) -> Real

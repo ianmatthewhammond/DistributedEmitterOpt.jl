@@ -46,7 +46,7 @@ _robust_samples_matrix(samples) = samples === nothing ? nothing :
     Float64[samples[i][j] for i in eachindex(samples), j in 1:2]
 # The aggregation (`robust_mode`: :ks softmin or :epigraph) and, for the epigraph, its
 # tolerances and the linewidth eps/tolerance are part of the objective/constraint
-# definition too (epigraph port, 2026-09-21). A checkpoint without `robust_mode` predates
+# definition too. A checkpoint without `robust_mode` predates
 # the epigraph and was written by the KS path. The KS comparison is unchanged: with
 # ck_mode = mode = :ks and no epigraph config, the result is the one it always was.
 function _same_robust_config(ck_samples, ck_sharpness, samples, sharpness;
@@ -878,16 +878,16 @@ end
 
 One β-epoch of the epigraph worst case (formulation and evaluation-order facts in
 `EpigraphSidewall.jl`). Variables x = [p; τ], minimize −τ subject to
-τ − gᵢ(p)/(g_norm T) ≤ 0 per sample, plus (stage D) the normalized linewidth
+τ − gᵢ(p)/(g_norm T) ≤ 0 per sample, plus optional normalized linewidth
 constraints on p.
 
 Conventions that differ from the KS path, each on purpose:
 - `prob.g_history` records the TRUE worst case min_i gᵢ/g_norm at every evaluated
-  point (so the stage-A gate g/g_norm > 1 keeps its meaning); `prob.g` and the
+  point (preserving the normalized improvement criterion g/g_norm > 1); `prob.g` and the
   returned `g_opt` are T·τ at the committed point, a certified lower bound on it.
 - `ftol_rel = 0`: τ can sit still for an iteration while p moves, and a relative
   f-tolerance would then stop the run with FTOL_REACHED.
-- `rho_init` is read in the KS path's units (the campaign passes 1/g_norm) and
+- `rho_init` is read in the KS path's units (for example, 1/g_norm) and
   divided by T, i.e. expressed in τ units: ρ = rho_init / T.
 - Every place x meets `prob.p` slices `x[1:np]` (checkpoint, returned design,
   `log_iteration!`). With x of length np+1, `prob.p .= x` throws.

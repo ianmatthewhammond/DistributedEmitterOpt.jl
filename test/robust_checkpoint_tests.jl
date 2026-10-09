@@ -38,7 +38,7 @@ M = DEO._robust_samples_matrix(samples)
     @test ok(md0) === nothing
     @test ok(md0; robust_samples=nothing, robust_sharpness=200.0) === nothing   # sharpness irrelevant when off
     @test_throws ArgumentError ok(md0; robust_samples=samples, robust_sharpness=200.0)
-    # the running campaign's existing checks are untouched
+    # existing checkpoint compatibility checks are untouched
     @test_throws ArgumentError DEO._validate_checkpoint_metadata!(md0; filepath="ck", max_iter=200, beta_schedule=[16.0],
         alpha_schedule=nothing, backend=:standalone_ccsaq, use_constraints=false)
 end
