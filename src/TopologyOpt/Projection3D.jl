@@ -63,7 +63,7 @@ function DSP_dpf(p::Real, ρ̃::Real, ∇ρ̃; R::Float64, β::Float64, η::Floa
 
     norm∇ρ̃ = sqrt(∇ρ̃ ⋅ ∇ρ̃)
     if norm∇ρ̃ < 1e-8
-        return ∂projection_∂pf(ρ̃, β, η)
+        return ∂projection_∂pf(ρ̃, β, η) * p
     end
 
     d = ((η - ρ̃) / norm∇ρ̃) / R
