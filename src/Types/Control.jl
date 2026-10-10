@@ -14,6 +14,8 @@ and linewidth constraints.
 - `β` — Projection steepness (higher = sharper, use continuation)
 - `η` — Threshold point (typically 0.5)
 - `R_ssp` — SSP smoothing radius
+- `use_sidewall` / `sidewall_slope` / `sidewall_z0` — optional linear sidewall on
+  the 2D-DOF extrusion (see Projection3D.jl). Requires SSP and 2D DOFs.
 
 ## Linewidth Constraints
 - `use_constraints` — Enable erosion/dilation constraints
@@ -37,6 +39,15 @@ Base.@kwdef mutable struct Control
     use_ssp::Bool = false
     R_ssp::Float64 = 0.55 * R_filter[1]
     foundry_projection_mode::Symbol = :current
+
+    # ═══ Linear sidewalls (2D-DOF extrusion; SSP only) ═══
+    # Off by default and bit-identical to the z-invariant extrusion when off.
+    # `sidewall_slope = cot(θ)` for a wall θ degrees from horizontal: > 0 tapers
+    # inward going up (etch-like), < 0 is re-entrant (lift-off-like).
+    # `sidewall_z0` is the height at which the design's own linewidth is met.
+    use_sidewall::Bool = false
+    sidewall_slope::Float64 = 0.0
+    sidewall_z0::Float64 = 0.0
 
     # ═══ Linewidth Constraints ═══
     use_constraints::Bool = false

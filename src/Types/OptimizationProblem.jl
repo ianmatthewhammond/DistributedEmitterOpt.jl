@@ -26,6 +26,8 @@ mutable struct OptimizationProblem{PDE<:MaxwellProblem,Obj<:ObjectiveFunction}
     g::Float64               # current objective value
     ∇g::Vector{Float64}      # current gradient
     g_history::Vector{Float64} # history of objective values
+    p_best::Vector{Float64}  # best design seen (maximization)
+    g_best::Float64          # best objective seen
 
     # Metadata
     root::String             # output directory
@@ -38,6 +40,15 @@ Base.show(io::IO, prob::OptimizationProblem) =
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
+
+"""
+    validate_objective(objective, sim)
+
+Hook for objective-specific construction-time checks against the simulation (mesh regions,
+single-sim restrictions). The default accepts everything; `SERSObjective` overrides it
+(see Objectives/SurfaceShell.jl).
+"""
+validate_objective(::ObjectiveFunction, sim) = nothing
 
 """
     OptimizationProblem(pde, objective, sim, solver; kwargs...)
@@ -64,6 +75,7 @@ function OptimizationProblem(
     control::Control=Control(),
     root::String="./data/"
 )
+    validate_objective(objective, sim)
     pool = SolverCachePool(solver)
 
     np = sim.np
@@ -71,6 +83,8 @@ function OptimizationProblem(
     g = 0.0
     ∇g = zeros(Float64, np)
     g_history = Float64[]
+    p_best = zeros(Float64, np)
+    g_best = -Inf
 
     OptimizationProblem(
         pde,
@@ -83,6 +97,8 @@ function OptimizationProblem(
         g,
         ∇g,
         g_history,
+        p_best,
+        g_best,
         root,
         0
     )
@@ -97,6 +113,7 @@ function OptimizationProblem(
     control::Control=Control(),
     root::String="./data/"
 )
+    validate_objective(objective, sim)
     pool = SolverPoolBundle(solver, sim)
 
     np = default_sim(sim).np
@@ -104,6 +121,8 @@ function OptimizationProblem(
     g = 0.0
     ∇g = zeros(Float64, np)
     g_history = Float64[]
+    p_best = zeros(Float64, np)
+    g_best = -Inf
 
     OptimizationProblem(
         pde,
@@ -116,6 +135,8 @@ function OptimizationProblem(
         g,
         ∇g,
         g_history,
+        p_best,
+        g_best,
         root,
         0
     )

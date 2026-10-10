@@ -312,7 +312,14 @@ function build_foundry_pf(pf_vec::Vector{Float64}, sim, control)
     sim.grid.params[:, :] .= reshape(pf_vec, (nx, ny))
 
     if control.foundry_projection_mode == :legacy
-        return (r -> pf_grid(r, sim.grid))
+        # Capture an evaluation-local SNAPSHOT of the grid values, never `sim.grid` itself.
+        # A closure over the mutable `sim` would (a) read the *next* evaluation's params after the
+        # in-place write above (aliasing), and (b) compare `===`-equal to the closure of every other
+        # evaluation, so any consumer keyed on identity (e.g. a cache) could not tell designs apart.
+        # A value-keyed cache must observe the field belonging to each evaluation.
+        params = copy(sim.grid.params)
+        gridx, gridy = sim.grid.x, sim.grid.y
+        return (r -> pf_grid(r, params, gridx, gridy))
     elseif control.foundry_projection_mode == :current
         pf_vals = [pf_grid(node, sim.grid) for node in sim.grid.nodes]
         return FEFunction(sim.Pf, pf_vals)

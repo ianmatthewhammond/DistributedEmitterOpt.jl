@@ -76,14 +76,31 @@ default_pool(bundle::SolverPoolBundle) = bundle.default
 """
     map_field(field, sim, space::Symbol)
 
-Map a CellField/FEFunction onto the target simulation's space.
-Assumes both simulations share the same discrete model.
+Use a CellField/FEFunction on another simulation of the same model, retaining
+the original field without a constrained-space or material projection.
+Different-model transfers require a separate forward/adjoint lifting operator.
 """
 function map_field(field, sim::Simulation, space::Symbol)
     if space == :U
-        return interpolate(field, sim.U)
+        # Different mirror parities constrain different Nedelec DOFs. Projecting
+        # a physical field into the other polarization's constrained space changes
+        # the objective and requires a transpose transfer in its derivative.
+        # On the shared model no transfer is needed: integrate the original field
+        # and differentiate it against its own source basis.
+        Gridap.CellData.get_triangulation(field).model === sim.model ||
+            throw(ArgumentError("map_field: U fields require a shared model; multi-mesh lifting is unsupported"))
+        return field
     elseif space == :Pf
-        return interpolate(field, sim.Pf)
+        # Projected material is generally nonlinear inside each element.
+        # Nodal interpolation would alter it in the second polarization's PDE,
+        # while the sensitivity would still differentiate the original projection.
+        if field isa CellField
+            Gridap.CellData.get_triangulation(field).model === sim.model ||
+                throw(ArgumentError("map_field: Pf fields require a shared model"))
+        elseif !(field isa Function)
+            throw(ArgumentError("map_field: unsupported scalar field representation"))
+        end
+        return field
     else
         error("map_field: unsupported space $space")
     end
@@ -136,6 +153,11 @@ function build_simulation_bundle(meshfile::String;
         sizes,
         model,
         bot_PEC=bot_PEC)
+
+    # Scalar spaces have no polarization-dependent boundary constraints.
+    # Sharing them also lets the tv_void shell use one material geometry.
+    sim_x.P = sim_y.P
+    sim_x.Pf = sim_y.Pf
 
     by_pol = Dict{Symbol,Simulation}(:y => sim_y, :x => sim_x)
     SimulationBundle(sim_y, by_pol)

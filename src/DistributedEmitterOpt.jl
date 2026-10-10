@@ -24,6 +24,7 @@ using Gridap: TestFESpace, ReferenceFE, CellField, interpolate
 using Gridap: nedelec, lagrangian
 using Gridap: VectorValue, ∇, ⋅, outer, num_free_dofs
 using Gridap: assemble_matrix, assemble_vector
+using Gridap.CellData: get_physical_coordinate
 using Gridap.Geometry: DiscreteModel, get_face_labeling, get_face_mask, BoundaryTriangulation
 using GridapGmsh: GmshDiscreteModel
 
@@ -70,6 +71,7 @@ include("Physics/EigenSolver.jl")
 # ---------------------------------------------------------------------------
 
 include("Objectives/SERSObjective.jl")
+include("Objectives/SurfaceShell.jl")
 include("Objectives/EigenObjective.jl")
 
 # ---------------------------------------------------------------------------
@@ -102,9 +104,12 @@ include("Solvers/PardisoSolver.jl")
 # Optimization
 # ---------------------------------------------------------------------------
 
+include("Optimization/MmaccsaBackend.jl")
 include("Optimization/Optimizer.jl")
 include("Optimization/GradientCoordinator.jl")
 include("Optimization/GradientCoordinatorEigen.jl")
+include("Optimization/RobustSidewall.jl")
+include("Optimization/EpigraphSidewall.jl")
 
 # ---------------------------------------------------------------------------
 # Analysis
@@ -162,6 +167,8 @@ export filter_grid, filter_grid_adjoint
 export filter_helmholtz!, filter_helmholtz_adjoint!
 export project_grid, project_grid_adjoint
 export project_fe, project_ssp
+export smooth_project_sidewall, sidewall_partials, dpt_dpf_sidewall, dpt_dpf_field
+export sidewall_samples, ks_softmin, robust_sidewall_objective!, robust_sidewall_samples!
 export christiansen_ε, ∂christiansen_ε
 export glc_solid, glc_void, glc_solid_fe, glc_void_fe
 

@@ -3,7 +3,7 @@ module Analysis
 using JLD2
 using Printf
 using CairoMakie
-import ..DistributedEmitterOpt: OptimizationProblem, FieldConfig, MaxwellProblem, evaluate, default_sim, sim_for, pool_for, get_cache!, build_phys_params, map_pt, assemble_maxwell, maxwell_lu!, assemble_source, maxwell_solve!, has_maxwell_factor, glc_solid, filter_grid, project_grid, pf_grid, project_ssp
+import ..DistributedEmitterOpt: OptimizationProblem, FieldConfig, MaxwellProblem, evaluate, default_sim, sim_for, pool_for, get_cache!, build_phys_params, map_pt, assemble_maxwell, maxwell_lu!, assemble_source, maxwell_solve!, has_maxwell_factor, glc_solid, filter_grid, project_grid, pf_grid, project_ssp, build_foundry_pf, smoothed_projection_vec
 using Gridap
 using LinearAlgebra
 using Statistics
@@ -194,13 +194,13 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
         else
             # Current flow: interpolate pf, then SSP on FEM.
             pf = build_foundry_pf(pf_vec, sim0, prob.control)
-            pt = project_ssp(pf, prob.control)
+            pt = project_ssp(pf, prob.control, sim0.Ω)
         end
     else
         # 3D mode (placeholder implementation)
         pf_vec = p_opt # Assumes no filter for simplicity if not foundry
         pf = FEFunction(sim0.Pf, pf_vec)
-        pt = project_ssp(pf, prob.control)
+        pt = project_ssp(pf, prob.control, sim0.Ω)
     end
 
     # Write optimized design

@@ -1,6 +1,22 @@
 # Mixed‑Output Gradient Bug (Cross‑Polarization Mapping)
 
-**Status:** Active investigation / ready to implement fix
+**Status:** Fixed for shared-model bundles; cross-mesh transfer remains unsupported.
+
+The fix evaluates original vector and material CellFields directly on the common
+model. It removes both unnecessary interpolations. Vector interpolation into the
+other polarization's constrained space discarded physical components. Scalar
+interpolation also changed the nonlinear projected material while its derivative
+still used the original projection chain. A transpose of the vector transfer alone
+would not correct that material mismatch.
+
+A deterministic anisotropic mixed-output central-difference ladder (steps 1e-3,
+1e-4, 1e-5) originally plateaued at 5.54e-4 in 3D and 2.11e-3 in foundry mode.
+Removing vector interpolation alone left about 9.5e-4. Removing both maps gives
+4.68e-10 and 1.93e-8 at the finest step. See
+`test/mixed_output_gradient_tests.jl`; mixed-output tests now use the same 1e-4
+criterion as single-output tests. The original diagnosis and proposal below are
+retained as historical context; an explicit transfer/transpose pair is needed only
+if future fields really use different models.
 
 This document explains why gradients degrade (>0.1% relative error) for **mixed‑output** cases (multi‑output with mixed polarizations) and how to fix it. The short version: **we are using a forward projection in both forward and adjoint paths, but the adjoint requires the transpose of the forward operator**. This only appears when we cross‑map fields between x‑ and y‑polarized simulations.
 

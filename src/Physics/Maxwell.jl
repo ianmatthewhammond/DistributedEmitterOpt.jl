@@ -178,7 +178,7 @@ function assemble_material_sensitivity_pf(E, λ, pf, pt, sim, phys::PhysicalPara
     ∂g_∂pf = assemble_vector(space) do v
         (k^2) * ∫(
             real(
-                (((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)) *
+                dpt_dpf_field(v, pf, control, sim.Ω_design) *
                 (∂εε ∘ pt) *
                 (conj(λ) ⋅ E)
             )
