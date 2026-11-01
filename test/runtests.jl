@@ -6,6 +6,10 @@ using Test
         include("gradient_tests.jl")
     end
 
+    @testset "Surface measure tests" begin
+        include("surface_tv_void_tests.jl")
+    end
+
     @testset "Constraint Tests" begin
         include("constraint_tests.jl")
     end
@@ -25,4 +29,6 @@ using Test
     @testset "PML Tests" begin
         include("pml_tests.jl")
     end
+
+    include("sidewall_runtests.jl")
 end

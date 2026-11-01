@@ -88,7 +88,7 @@ function glc_solid_fe(p_vec::Vector{Float64}, grad::Vector{Float64}, obj)
 
         norm_fac = sum(∫(1.0)sim.dΩ_design)
         ∂M_∂pf = assemble_vector(sim.Pf) do v
-            dpt = ((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)
+            dpt = dpt_dpf_field(v, pf, control, sim.Ω_design)
             ∫(
                 (
                     pt * (-2 * c0 * exp_term) * (∇pf ⋅ ∇(v)) +
@@ -139,7 +139,7 @@ function glc_void_fe(p_vec::Vector{Float64}, grad::Vector{Float64}, obj)
 
         norm_fac = sum(∫(1.0)sim.dΩ_design)
         ∂M_∂pf = assemble_vector(sim.Pf) do v
-            dpt = ((p, ∇p, pf, ∇pf) -> dpt_dpf(p, ∇p, pf, ∇pf; control)) ∘ (v, ∇(v), pf, ∇pf)
+            dpt = dpt_dpf_field(v, pf, control, sim.Ω_design)
             ∫(
                 (
                     (1 - pt) * (-2 * c0 * exp_term) * (∇pf ⋅ ∇(v)) -

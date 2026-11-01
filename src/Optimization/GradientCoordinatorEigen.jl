@@ -35,7 +35,7 @@ function compute_gradient_eigen_2d!(∇g::Vector{Float64}, p::Vector{Float64},
 
     pf = build_foundry_pf(pf_vec, sim0, control)
 
-    pt = project_ssp(pf, control)
+    pt = project_ssp(pf, control, sim0.Ω)
 
     result = solve_eigen!(pde, pt, sim, pool)
 
@@ -72,7 +72,7 @@ function compute_gradient_eigen_3d!(∇g::Vector{Float64}, p::Vector{Float64},
     pf_vec = filter_helmholtz!(p, default_pool(pool).filter_cache, sim0, control)
     pf = FEFunction(sim0.Pf, pf_vec)
 
-    pt = project_ssp(pf, control)
+    pt = project_ssp(pf, control, sim0.Ω)
 
     result = solve_eigen!(pde, pt, sim, pool)
 

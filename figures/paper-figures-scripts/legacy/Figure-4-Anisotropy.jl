@@ -1,5 +1,5 @@
 using Pkg;
-Pkg.activate("<legacy-home>/GitHub/Emitter3DTopOpt"); # Ensure correct project environment
+Pkg.activate(get(ENV, "LEGACY_EMITTER_PROJECT", joinpath(homedir(), "GitHub", "Emitter3DTopOpt"))); # Ensure correct project environment
 using Revise
 # import Emitter3DTopOpt as e3 # Not strictly needed if helper functions are defined locally
 # plot_field, plot_substrate, combine_figures, add_text! = e3.plot_field, e3.plot_substrate, e3.combine_figures, e3.add_text!

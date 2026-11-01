@@ -1,7 +1,7 @@
 # Debugging Plan: Gradient Discrepancy
 
 ## 1. Problem Statement
-The new [DistributedEmitterOpt.jl](file://<legacy-home>/GitHub/DistributedEmitterOpt.jl/src/DistributedEmitterOpt.jl) codebase produces incorrect gradients (and likely objective values) compared to the legacy `Emitter3DTopOpt` code. The error manifests as a large relative discrepancy in finite difference checks.
+The new [DistributedEmitterOpt.jl](../../src/DistributedEmitterOpt.jl) codebase produces incorrect gradients (and likely objective values) compared to the legacy `Emitter3DTopOpt` code. The error manifests as a large relative discrepancy in finite difference checks.
 
 ## 2. Root Cause Analysis: Sign Error
 A detailed trace of both codebases reveals a sign inversion in the material sensitivity assembly.
@@ -20,12 +20,12 @@ A detailed trace of both codebases reveals a sign inversion in the material sens
     *   $\text{Grad} = + 2 k^2 \text{Re}(\lambda_{calc}^H \epsilon' u)$.
 
 ### The Discrepancy
-*   **Legacy Code ([Gradients.jl](file://<legacy-home>/GitHub/Emitter3DTopOpt/src/Gradients.jl) & [Physics.jl](file://<legacy-home>/GitHub/Emitter3DTopOpt/src/Physics.jl))**:
+*   **Legacy Code ([Gradients.jl](../../../Emitter3DTopOpt/src/Gradients.jl) & [Physics.jl](../../../Emitter3DTopOpt/src/Physics.jl))**:
     *   Calculates `real( - ∂A/∂p(v=conj(λ)) )`.
     *   Since `∂A/∂p` contains `-k^2`, effectively calculates `real( - (-k^2) ...)`.
     *   **Result**: $+ k^2 \dots$ (Matches derivation).
 
-*   **New Code ([Maxwell.jl](file://<legacy-home>/GitHub/DistributedEmitterOpt.jl/src/Physics/Maxwell.jl))**:
+*   **New Code ([Maxwell.jl](../../src/Physics/Maxwell.jl))**:
     *   Calculates `-(k^2) * real(...)`.
     *   **Result**: $- k^2 \dots$ (Mismatch).
 
@@ -36,7 +36,7 @@ A detailed trace of both codebases reveals a sign inversion in the material sens
 ## 4. Proposed Experiment / Fix
 
 ### Action
-Modify [DistributedEmitterOpt.jl/src/Physics/Maxwell.jl](file://<legacy-home>/GitHub/DistributedEmitterOpt.jl/src/Physics/Maxwell.jl) inside `assemble_material_sensitivity_pf`:
+Modify [DistributedEmitterOpt.jl/src/Physics/Maxwell.jl](../../src/Physics/Maxwell.jl) inside `assemble_material_sensitivity_pf`:
 
 ```diff
 -    -(k^2) * ∫(
@@ -49,7 +49,7 @@ Modify [DistributedEmitterOpt.jl/src/Physics/Maxwell.jl](file://<legacy-home>/Gi
 ```
 
 ### Verification
-1.  Run [scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl](file://<legacy-home>/GitHub/DistributedEmitterOpt.jl/scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl).
+1.  Run [scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl](../../scripts/experiments/isotropic_3d_volume/debug_isotropic_3d_volume.jl).
 2.  Expect Relative Error to drop from ~100% (or high value) to < 1% (finite difference match).
 
 ## 5. Next Steps

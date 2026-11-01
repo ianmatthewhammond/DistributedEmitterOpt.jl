@@ -1,6 +1,6 @@
 # --- START OF FILE Figure-1.jl.txt ---
 
-using Pkg; Pkg.activate("<legacy-home>/GitHub/Emitter3DTopOpt")
+using Pkg; Pkg.activate(get(ENV, "LEGACY_EMITTER_PROJECT", joinpath(homedir(), "GitHub", "Emitter3DTopOpt")))
 using Revise
 import Emitter3DTopOpt as e3
 plot_field, plot_substrate, combine_figures, add_text! = e3.plot_field, e3.plot_substrate, e3.combine_figures, e3.add_text!

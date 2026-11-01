@@ -1,6 +1,6 @@
 
 # using Pkg;
-# Pkg.activate("<legacy-home>/GitHub/Emitter3DTopOpt");
+# Pkg.activate(get(ENV, "LEGACY_EMITTER_PROJECT", joinpath(homedir(), "GitHub", "Emitter3DTopOpt")));
 # using Revise
 # include("load_data.jl")
 # include("FigureUtils.jl")

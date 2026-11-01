@@ -56,7 +56,7 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     else
         # Current flow: interpolate pf to FEM first, then apply FEM SSP.
         pf = build_foundry_pf(pf_vec, sim0, control)
-        pt = project_ssp(pf, control)
+        pt = project_ssp(pf, control, sim0.Ω)
     end
 
     # Forward Maxwell solves
@@ -136,7 +136,7 @@ function compute_gradient_3d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     pf = FEFunction(sim0.Pf, pf_vec)
 
     # SSP projection
-    pt = project_ssp(pf, control)
+    pt = project_ssp(pf, control, sim0.Ω)
 
     # Forward Maxwell solves
     fields = solve_forward!(pde, pt, sim, pool)
