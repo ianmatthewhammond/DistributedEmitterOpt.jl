@@ -44,10 +44,16 @@ const DEO = DistributedEmitterOpt
         # The two branches must agree (to the smoothing scale) as ‖∇ρ̃‖ crosses
         # 1e-8. With the missing *p the jump is a factor 1/p — for p=0.25 a 4×
         # discontinuity this test catches immediately.
+        #
+        # Checked away from ρ̃ = η: there d = 0 exactly, and the non-flat branch
+        # keeps a fill-factor term (15/8)·p·∂P that does not vanish as ‖∇ρ̃‖ → 0,
+        # so SSP itself is discontinuous at that one point, with or without *p.
         p = 0.25
         n̂ = [1.0, 0.0, 0.0]
-        below = DEO.DSP_dpf(p, ρ̃, 0.99e-8 * n̂; R, β, η)
-        above = DEO.DSP_dpf(p, ρ̃, 1.01e-8 * n̂; R, β, η)
-        @test below ≈ above rtol = 1e-6
+        for ρ̃c in (0.3, 0.45, 0.55, 0.7)
+            below = DEO.DSP_dpf(p, ρ̃c, 0.99e-8 * n̂; R, β, η)
+            above = DEO.DSP_dpf(p, ρ̃c, 1.01e-8 * n̂; R, β, η)
+            @test below ≈ above rtol = 1e-6
+        end
     end
 end
