@@ -22,6 +22,10 @@ using Test
         include("logger_tests.jl")
     end
 
+    @testset "Material Dataset Tests" begin
+        include("material_datasets_tests.jl")
+    end
+
     @testset "PML Tests" begin
         include("pml_tests.jl")
     end
