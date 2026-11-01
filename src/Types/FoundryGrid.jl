@@ -42,8 +42,10 @@ Base.show(io::IO, g::FoundryGrid) = print(io, "FoundryGrid($(length(g.x))×$(len
 """
     getgrid(labels, Ω, np, nodes; sizes=nothing) -> FoundryGrid
 
-Build a FoundryGrid from mesh topology. The grid covers the x-y extent of the
-design region with approximately √np points per side.
+Build a FoundryGrid whose 2D pixel density matches the FEM resolution of the
+design region. For a 3D design (Δz > 0), `nx·ny·nz ≈ np` ⇒ roughly one pixel
+per mesh cell on the design midplane. The caller is expected to pass a
+design-restricted DOF count as `np`; see the call site in `build_simulation`.
 """
 function getgrid(labels, Ω, np, nodes; sizes=nothing)
     if isnothing(sizes)
@@ -102,9 +104,11 @@ function getgrid(labels, Ω, np, nodes; sizes=nothing)
 
     Δx, Δy, Δz = (highx - lowx), (highy - lowy), (highz - lowz)
 
-    # Legacy density rule: include design thickness when available.
+    # Match pixel density to design-region FEM resolution. For a cubic design
+    # with n^3 mesh DOFs we want nx ≈ n per axis, i.e. ρ = n/L = np^(1/3)/V^(1/3).
+    # The 2D branch covers true 2D geometries (Δz = 0) where nx·ny ≈ np.
     ρ = if Δz > 0.0
-        √(np) / (Δx * Δy * Δz)^(1 / 3)
+        np^(1 / 3) / (Δx * Δy * Δz)^(1 / 3)
     else
         √(np) / (Δx * Δy)^(1 / 2)
     end

@@ -16,6 +16,8 @@ const MaterialSpec = Union{String,Float64}
 - `mat_design` — Design region material (typically metal)
 - `mat_substrate` — Substrate material (defaults to mat_design)
 - `mat_fluid` — Fluid/background material (default √1.77)
+- `pml` — `ZPML` recipe for ±z PML layers, or `nothing` for the first-order ABC
+  (default). Needs a mesh made with `genmesh(...; pml=true)`.
 - `logger_cfg` — Runtime logging config (default off)
 """
 Base.@kwdef struct Environment
@@ -23,8 +25,13 @@ Base.@kwdef struct Environment
     mat_substrate::MaterialSpec = mat_design
     mat_fluid::MaterialSpec = sqrt(1.77)
     bot_PEC::Bool = false
+    pml::Union{Nothing,ZPML} = nothing
     logger_cfg::RunLogConfig = RunLogConfig()
 end
+
+# Positional form from before `pml` existed (no PML).
+Environment(mat_design, mat_substrate, mat_fluid, bot_PEC::Bool, logger_cfg::RunLogConfig) =
+    Environment(mat_design, mat_substrate, mat_fluid, bot_PEC, nothing, logger_cfg)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Material resolution
