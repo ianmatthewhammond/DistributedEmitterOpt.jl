@@ -105,7 +105,11 @@ struct PhysicalParams
     des_high::Float64        # z-coord of design region top
     α::Float64               # Artificial absorption
     bot_PEC::Bool        # bottom PEC or not
+    pml::Union{Nothing,ZPMLParams}  # ±z PML (nothing = ABC only)
 end
+
+PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC) =
+    PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, nothing)
 
 """
     assemble_maxwell(pt, sim, phys) -> SparseMatrix
@@ -113,8 +117,14 @@ end
 Assemble Maxwell curl-curl matrix with Sommerfeld ABC.
 
 A = ∫ (∇×v)·(∇×u) dΩ - k²∫ ε(p)v·u dΩ + ik√ε ∫ v·u dS (ABC)
+
+With `phys.pml` set, the background terms carry the z-stretch tensors
+(see `Types/PML.jl`) and the ABC stays on the outer faces as termination:
+
+A = ∫ (∇×v)·(Λν ∇×u) dΩ - k²∫ ε₀ v·(Λε u) dΩ - k²∫ εₘ(p) v·u dΩ_d + ABC
 """
 function assemble_maxwell(pt, sim, phys::PhysicalParams)
+    isnothing(phys.pml) || return assemble_maxwell_pml(pt, sim, phys)
     k = phys.ω
 
     # Permittivity as composed functions
@@ -133,6 +143,39 @@ function assemble_maxwell(pt, sim, phys::PhysicalParams)
             # Design region permittivity
             (k^2) * ∫(v ⋅ (εₘ * u))sim.dΩ_design +
             # Sommerfeld ABC (top and bottom)
+            +im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_top +
+            +bot_PEC * 1im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
+        )
+    end
+
+    return A_mat
+end
+
+"""
+    assemble_maxwell_pml(pt, sim, phys) -> SparseMatrix
+
+`assemble_maxwell` with the ±z PML of `phys.pml`. The design region must lie
+outside the layers (it always does for `genmesh` meshes), so the design term
+and its sensitivity are unchanged.
+"""
+function assemble_maxwell_pml(pt, sim, phys::PhysicalParams)
+    k = phys.ω
+    pml = phys.pml
+
+    ε₀ = x -> ε_background_wf(x, phys)
+    sqrt_ε₀ = sqrt ∘ ε₀
+    εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
+    ε₀Λε = CellField(x -> ε_background_wf(x, phys) * pml_Λε(x, pml), sim.Ω)
+    Λν = CellField(x -> pml_Λν(x, pml), sim.Ω)
+
+    bot_PEC = phys.bot_PEC ? 0.0 : 1.0
+
+    A_mat = assemble_matrix(sim.U, sim.V) do u, v
+        (
+            ∫(shifted_curl_op(v, k, phys.θ) ⋅ (Λν ⋅ shifted_curl_op(u, k, phys.θ)))sim.dΩ -
+            (k^2) * ∫(v ⋅ (ε₀Λε ⋅ u))sim.dΩ -
+            (k^2) * ∫(v ⋅ (εₘ * u))sim.dΩ_design +
+            # Outer-face ABC terminates the layers
             +im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_top +
             +bot_PEC * 1im * k * cosd(phys.θ) * ∫(v ⋅ (u * sqrt_ε₀))sim.dS_bottom
         )

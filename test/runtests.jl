@@ -21,4 +21,8 @@ using Test
     @testset "Logger Tests" begin
         include("logger_tests.jl")
     end
+
+    @testset "PML Tests" begin
+        include("pml_tests.jl")
+    end
 end

@@ -362,3 +362,30 @@ function getdesignz(labels, Ω)
 
     return minimum(all_z), maximum(all_z)
 end
+
+"""
+    getpmlz(labels, Ω) -> (z_bot, d_bot, z_top, d_top)
+
+Inner faces and thicknesses of the `PMLBottom` / `PMLTop` volumes written by
+`genmesh(...; pml=true)`. A missing layer has thickness 0. Errors if the mesh
+has neither.
+"""
+function getpmlz(labels, Ω)
+    dimension = num_cell_dims(Ω.model)
+    cell_coords = Gridap.Geometry.get_cell_coordinates(Ω)
+    names = Gridap.Geometry.get_tag_name(labels)
+    function zrange(tag)
+        tag in names || return nothing
+        ids = findall(get_face_mask(labels, tag, dimension))
+        isempty(ids) && return nothing
+        zs = [node[3] for id in ids for node in cell_coords[id]]
+        return minimum(zs), maximum(zs)
+    end
+    bot = zrange("PMLBottom")
+    top = zrange("PMLTop")
+    isnothing(bot) && isnothing(top) &&
+        error("Environment has a PML but the mesh has no PMLBottom/PMLTop volume; mesh it with genmesh(...; pml=true)")
+    z_bot, d_bot = isnothing(bot) ? (-Inf, 0.0) : (bot[2], bot[2] - bot[1])
+    z_top, d_top = isnothing(top) ? (Inf, 0.0) : (top[1], top[2] - top[1])
+    return z_bot, d_bot, z_top, d_top
+end
