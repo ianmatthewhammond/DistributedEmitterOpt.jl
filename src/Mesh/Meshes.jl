@@ -33,7 +33,7 @@ mutable struct SymmetricGeometry <: AbstractGeometry
     ht::Float64          # Target (Raman) top height above design
     hd::Float64          # Design region height
     hsub::Float64        # Substrate height
-    dpml::Float64        # PML thickness (for reference, not meshed)
+    dpml::Float64        # PML thickness (meshed only with genmesh(...; pml=true))
     l1::Float64          # Air mesh resolution
     l2::Float64          # Design mesh resolution (finest)
     l3::Float64          # Substrate mesh resolution
@@ -265,11 +265,17 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    genmesh(geo, meshfile; per_x=true, per_y=true) -> (des_low, des_high)
+    genmesh(geo, meshfile; per_x=false, per_y=false, pml=false) -> (des_low, des_high)
 
 Generate periodic mesh using the legacy box point order (Emitter3DTopOpt).
+
+With `pml=true`, a layer of thickness `geo.dpml` is added below the substrate
+(volume `PMLBottom`) and above the air (volume `PMLTop`). The physical layers
+keep the coordinates they have without it; `TopZ` / `BottomZ` move to the
+outer faces of the layers. Use with `Environment(pml=ZPML(...))`.
 """
-function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false)
+function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false, pml::Bool=false)
+    pml && geo.dpml <= 0 && error("genmesh: pml=true needs geo.dpml > 0")
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 1)
     gmsh.option.setNumber("Mesh.Algorithm", 5)
@@ -281,16 +287,28 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
     z0 = -(geo.hair + geo.hd + geo.hsub) / 2
     L, R = -geo.L / 2, geo.L / 2
 
-    # Substrate
-    fll = (L, geo.W / 2, z0, geo.l3)
-    flr = (R, geo.W / 2, z0, geo.l3)
+    # Bottom PML (optional), then substrate on top of it
     ful = (L, geo.W / 2, z0 + geo.hsub, geo.l2)
     fur = (R, geo.W / 2, z0 + geo.hsub, geo.l2)
-    bll = (L, -geo.W / 2, z0, geo.l3)
-    blr = (R, -geo.W / 2, z0, geo.l3)
     bul = (L, -geo.W / 2, z0 + geo.hsub, geo.l2)
     bur = (R, -geo.W / 2, z0 + geo.hsub, geo.l2)
-    sub_bx = box_legacy(tt, fll, flr, ful, fur, bll, blr, bul, bur)
+    if pml
+        zp = z0 - geo.dpml
+        pml_bot_bx = box_legacy(tt,
+            (L, geo.W / 2, zp, geo.l3), (R, geo.W / 2, zp, geo.l3),
+            (L, geo.W / 2, z0, geo.l3), (R, geo.W / 2, z0, geo.l3),
+            (L, -geo.W / 2, zp, geo.l3), (R, -geo.W / 2, zp, geo.l3),
+            (L, -geo.W / 2, z0, geo.l3), (R, -geo.W / 2, z0, geo.l3))
+        sub_bx = boxabove_legacy(pml_bot_bx, tt,
+            pml_bot_bx.p_ful, pml_bot_bx.p_fur, ful, fur,
+            pml_bot_bx.p_bul, pml_bot_bx.p_bur, bul, bur)
+    else
+        fll = (L, geo.W / 2, z0, geo.l3)
+        flr = (R, geo.W / 2, z0, geo.l3)
+        bll = (L, -geo.W / 2, z0, geo.l3)
+        blr = (R, -geo.W / 2, z0, geo.l3)
+        sub_bx = box_legacy(tt, fll, flr, ful, fur, bll, blr, bul, bur)
+    end
     z0 += geo.hsub
 
     des_low = z0
@@ -334,9 +352,21 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
         src_bx.p_bul, src_bx.p_bur, bul, bur)
     z0 += geo.hair
 
+    # Top PML (optional)
+    bxs = [sub_bx, des_bx, tar_bx, src_bx, air_bx]
+    bot_bx, top_bx = sub_bx, air_bx
+    if pml
+        zp = z0 + geo.dpml
+        pml_top_bx = boxabove_legacy(air_bx, tt,
+            air_bx.p_ful, air_bx.p_fur, (L, geo.W / 2, zp, geo.l3), (R, geo.W / 2, zp, geo.l3),
+            air_bx.p_bul, air_bx.p_bur, (L, -geo.W / 2, zp, geo.l3), (R, -geo.W / 2, zp, geo.l3))
+        bxs = [pml_bot_bx; bxs; pml_top_bx]
+        bot_bx, top_bx = pml_bot_bx, pml_top_bx
+    end
+
     # Periodic BCs
     gmsh.model.geo.synchronize()
-    for bx in [sub_bx, des_bx, tar_bx, src_bx, air_bx]
+    for bx in bxs
         if per_x
             gmsh.model.mesh.setPeriodic(2, [bx.ps_l], [bx.ps_r],
                 [1, 0, 0, -geo.L, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
@@ -349,27 +379,19 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
 
     # Physical groups (match legacy ordering)
     group(tt, 0, "NodesZ", [
-        air_bx.p_ful, air_bx.p_fur,
-        air_bx.p_bul, air_bx.p_bur,
+        top_bx.p_ful, top_bx.p_fur,
+        top_bx.p_bul, top_bx.p_bur,
     ])
     group(tt, 1, "EdgesZ", [
-        sub_bx.l_f2bll, sub_bx.l_f2blr,
-        sub_bx.l_fb, sub_bx.l_bb,
-        air_bx.l_ft, air_bx.l_f2bul,
-        air_bx.l_f2bur, air_bx.l_bt,
+        bot_bx.l_f2bll, bot_bx.l_f2blr,
+        bot_bx.l_fb, bot_bx.l_bb,
+        top_bx.l_ft, top_bx.l_f2bul,
+        top_bx.l_f2bur, top_bx.l_bt,
     ])
-    group(tt, 2, "TopZ", [air_bx.ps_t])
-    group(tt, 2, "BottomZ", [sub_bx.ps_u])
-    group(tt, 2, "FacesX", [
-        sub_bx.ps_l, sub_bx.ps_r, des_bx.ps_l, des_bx.ps_r,
-        tar_bx.ps_l, tar_bx.ps_r, src_bx.ps_l, src_bx.ps_r,
-        air_bx.ps_l, air_bx.ps_r,
-    ])
-    group(tt, 2, "FacesY", [
-        sub_bx.ps_f, sub_bx.ps_b, des_bx.ps_f, des_bx.ps_b,
-        tar_bx.ps_f, tar_bx.ps_b, src_bx.ps_f, src_bx.ps_b,
-        air_bx.ps_f, air_bx.ps_b,
-    ])
+    group(tt, 2, "TopZ", [top_bx.ps_t])
+    group(tt, 2, "BottomZ", [bot_bx.ps_u])
+    group(tt, 2, "FacesX", reduce(vcat, [[bx.ps_l, bx.ps_r] for bx in bxs]))
+    group(tt, 2, "FacesY", reduce(vcat, [[bx.ps_f, bx.ps_b] for bx in bxs]))
 
     group(tt, 0, "DesignNodes", [
         des_bx.p_fll, des_bx.p_flr, des_bx.p_bll, des_bx.p_blr,
@@ -386,6 +408,10 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
     group(tt, 2, "Target", [tar_bx.ps_t])
     group(tt, 2, "Source", [src_bx.ps_t])
     group(tt, 3, "Raman", [tar_bx.vol])
+    if pml
+        group(tt, 3, "PMLBottom", [pml_bot_bx.vol])
+        group(tt, 3, "PMLTop", [pml_top_bx.vol])
+    end
 
     gmsh.model.geo.synchronize()
     gmsh.model.mesh.generate(3)
