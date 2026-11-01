@@ -864,6 +864,9 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
 
     free_state!(state)
 
+    # A failed backend must not reach optimize!'s epoch-completion checkpoint.
+    ret < 0 && error("standalone $(algorithm) failed with ret=$ret after $(epoch_evals[]) epoch evaluations")
+
     log_info(:epoch, "standalone $(algorithm) completed"; ret, evals=prob.iteration, g_opt)
 
     return g_opt, p_opt, ret_grad
