@@ -103,6 +103,7 @@ function _checkpoint_metadata(data)
             alpha_schedule=nothing,
             backend=nothing,
             use_constraints=nothing,
+            constraint_tol_raw=1e-8,
             mma_state_path=nothing,
             robust_samples=nothing,
             robust_sharpness=nothing,
@@ -132,6 +133,7 @@ function _checkpoint_metadata(data)
         alpha_schedule=_checkpoint_alpha_schedule(data["alpha_schedule"]),
         backend=Symbol(String(data["backend"])),
         use_constraints=Bool(data["use_constraints"]),
+        constraint_tol_raw=haskey(data, "constraint_tol_raw") ? Float64(data["constraint_tol_raw"]) : 1e-8,
         mma_state_path=haskey(data, "mma_state_path") ? String(data["mma_state_path"]) : nothing,
         robust_samples=(haskey(data, "robust_samples") && data["robust_samples"] !== nothing) ? Matrix{Float64}(data["robust_samples"]) : nothing,
         robust_sharpness=(haskey(data, "robust_sharpness") && data["robust_sharpness"] !== nothing) ? Float64(data["robust_sharpness"]) : nothing,
@@ -149,6 +151,7 @@ function _validate_checkpoint_metadata!(metadata;
     alpha_schedule::Union{Vector{Float64},Nothing},
     backend::Symbol,
     use_constraints::Bool,
+    constraint_tol_raw::Float64=1e-8,
     robust_samples=nothing,
     robust_sharpness=nothing,
     robust_mode::Symbol=:ks,
@@ -166,6 +169,8 @@ function _validate_checkpoint_metadata!(metadata;
         throw(ArgumentError("Checkpoint $filepath was written with backend=$(metadata.backend), got backend=$backend"))
     metadata.use_constraints == use_constraints ||
         throw(ArgumentError("Checkpoint $filepath was written with use_constraints=$(metadata.use_constraints), got use_constraints=$use_constraints"))
+    robust_mode === :epigraph || metadata.constraint_tol_raw == constraint_tol_raw ||
+        throw(ArgumentError("Checkpoint $filepath constraint_tol_raw does not match this resume call"))
     sharp = _robust_sharpness_record(robust_samples, robust_mode, robust_sharpness)
     _same_robust_config(metadata.robust_samples, metadata.robust_sharpness, robust_samples, sharp;
                         ck_mode=metadata.robust_mode, mode=robust_mode,
@@ -238,6 +243,10 @@ Keyword arguments:
   constraint it systematically picks the most constraint-violating design in the
   trajectory — prefer the final iterate; (2) each epoch resets CCSA ρ and σ to
   defaults, discarding the previous epoch's learned trust-region state.
+- `constraint_tol_raw` -- absolute tolerance on each plain-path linewidth constraint
+  M - b1 (default 1e-8, preserving legacy behavior). For an EPS-relative tolerance
+  use e.g. 0.01 * prob.control.b1. Multiplied by constraint_scale in the standalone
+  foundry path. Stored and checked on resume; epigraph mode has its own tolerances.
 - `ccsa_verbose` -- verbosity level passed through to the standalone CCSA backend
 - `dual_algorithm` -- solver for the standalone backends' CCSA dual subproblem: `:mma`
   (default, as in upstream NLopt) or `:lbfgs` (Luksan PLIS). Ignored by `backend=:nlopt`.
@@ -268,6 +277,7 @@ function optimize!(prob::OptimizationProblem;
     ccsa_verbose::Integer=0,
     dual_algorithm::Symbol=:mma,
     constraint_scale::Float64=1.0,
+    constraint_tol_raw::Float64=1e-8,
     sigma_init::Union{Nothing,Vector{Float64}}=nothing,
     # Worst-case design over sidewall profiles. `nothing` keeps the
     # ordinary single evaluation; otherwise a vector of (slope, z0) samples, each a full
@@ -284,7 +294,11 @@ function optimize!(prob::OptimizationProblem;
         throw(ArgumentError("robust_mode must be :ks or :epigraph (got :$robust_mode)"))
     dual_algorithm in (:mma, :lbfgs) ||
         throw(ArgumentError("dual_algorithm must be :mma or :lbfgs (got :$dual_algorithm)"))
+    (isfinite(constraint_tol_raw) && constraint_tol_raw >= 0) ||
+        throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
     if robust_mode === :epigraph
+        constraint_tol_raw == 1e-8 ||
+            throw(ArgumentError("epigraph mode uses epigraph_linewidth_tol, not constraint_tol_raw"))
         backend === :nlopt &&
             throw(ArgumentError("robust_mode=:epigraph needs a standalone backend (:standalone_ccsaq or :standalone_mma), got :nlopt"))
         robust_samples === nothing &&
@@ -330,6 +344,7 @@ function optimize!(prob::OptimizationProblem;
                 alpha_schedule=α_schedule,
                 backend,
                 use_constraints,
+                constraint_tol_raw,
                 robust_samples,
                 robust_sharpness,
                 robust_mode,
@@ -400,7 +415,7 @@ function optimize!(prob::OptimizationProblem;
                 checkpoint_backend=backend,
                 checkpoint_use_constraints=use_constraints,
                 checkpoint_mma_state_path, rho_init, sigma_init, ccsa_verbose, dual_algorithm,
-                constraint_scale, robust_samples, robust_sharpness,
+                constraint_scale, constraint_tol_raw, robust_samples, robust_sharpness,
                 robust_mode, epigraph_config, epigraph_resume)
 
             prob.p .= p_opt
@@ -423,6 +438,7 @@ function optimize!(prob::OptimizationProblem;
                     alpha_schedule=α_schedule,
                     backend,
                     use_constraints,
+                    constraint_tol_raw,
                     robust_samples,
                     robust_sharpness=_robust_sharpness_record(robust_samples, robust_mode, robust_sharpness),
                     robust_mode,
@@ -440,6 +456,7 @@ function optimize!(prob::OptimizationProblem;
                 alpha_schedule=α_schedule,
                 backend,
                 use_constraints,
+                constraint_tol_raw,
                 robust_samples,
                 robust_sharpness=_robust_sharpness_record(robust_samples, robust_mode, robust_sharpness),
                 robust_mode,
@@ -516,6 +533,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     ccsa_verbose::Integer=0,
     dual_algorithm::Symbol=:mma,
     constraint_scale::Float64=1.0,
+    constraint_tol_raw::Float64=1e-8,
     sigma_init::Union{Nothing,Vector{Float64}}=nothing,
     robust_samples::Union{Nothing,Vector{Tuple{Float64,Float64}}}=nothing,
     robust_sharpness::Float64=200.0,
@@ -523,6 +541,8 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     epigraph_config=nothing,
     epigraph_resume=nothing)
 
+    (isfinite(constraint_tol_raw) && constraint_tol_raw >= 0) ||
+        throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
     backend === :nlopt || log_info(:epoch, "standalone CCSA dual solver"; epoch, dual_algorithm)
     if robust_mode === :epigraph
         backend === :nlopt &&
@@ -545,7 +565,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
         return _run_epoch_nlopt!(prob, max_iter, use_constraints, tol;
             g_norm, backup, backup_every, backup_path, epoch, epoch_evals_start,
             epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness)
+            checkpoint_backend, checkpoint_use_constraints, constraint_tol_raw, robust_samples, robust_sharpness)
     else
         algorithm = backend === :standalone_mma ? :mma : :ccsaq
         return _run_epoch_standalone!(prob, max_iter, use_constraints, tol;
@@ -554,7 +574,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
             checkpoint_alpha_schedule, checkpoint_backend,
             checkpoint_use_constraints, checkpoint_mma_state_path,
             rho_init, sigma_init, ccsa_verbose, dual_algorithm, constraint_scale,
-            robust_samples, robust_sharpness)
+            constraint_tol_raw, robust_samples, robust_sharpness)
     end
 end
 
@@ -574,6 +594,7 @@ function _run_epoch_nlopt!(prob::OptimizationProblem, max_iter::Int, use_constra
     checkpoint_alpha_schedule::Union{Vector{Float64},Nothing}=nothing,
     checkpoint_backend::Union{Symbol,Nothing}=nothing,
     checkpoint_use_constraints::Union{Bool,Nothing}=nothing,
+    constraint_tol_raw::Float64=1e-8,
     robust_samples::Union{Nothing,Vector{Tuple{Float64,Float64}}}=nothing,
     robust_sharpness::Float64=200.0)
     np = length(prob.p)
@@ -637,7 +658,7 @@ function _run_epoch_nlopt!(prob::OptimizationProblem, max_iter::Int, use_constra
         epoch_evals[] += 1
         checkpoint_metadata = _iteration_checkpoint_metadata(epoch, epoch_evals[],
             epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness)
+            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw)
         log_iteration!(prob, g, p; backup, backup_every, backup_path, checkpoint_metadata)
 
         return g
@@ -648,16 +669,16 @@ function _run_epoch_nlopt!(prob::OptimizationProblem, max_iter::Int, use_constra
         if prob.foundry_mode
             sim0 = default_sim(prob.sim)
             NLopt.inequality_constraint!(opt,
-                (p, g) -> glc_solid(p, g; sim=sim0, control=prob.control), 1e-8)
+                (p, g) -> glc_solid(p, g; sim=sim0, control=prob.control), constraint_tol_raw)
             NLopt.inequality_constraint!(opt,
-                (p, g) -> glc_void(p, g; sim=sim0, control=prob.control), 1e-8)
+                (p, g) -> glc_void(p, g; sim=sim0, control=prob.control), constraint_tol_raw)
         else
             sim0 = default_sim(prob.sim)
             obj = (; sim=sim0, control=prob.control, cache_pump=default_pool(prob.pool).filter_cache)
             NLopt.inequality_constraint!(opt,
-                (p, g) -> glc_solid_fe(p, g, obj), 1e-8)
+                (p, g) -> glc_solid_fe(p, g, obj), constraint_tol_raw)
             NLopt.inequality_constraint!(opt,
-                (p, g) -> glc_void_fe(p, g, obj), 1e-8)
+                (p, g) -> glc_void_fe(p, g, obj), constraint_tol_raw)
         end
     end
 
@@ -701,6 +722,7 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
     ccsa_verbose::Integer=0,
     dual_algorithm::Symbol=:mma,
     constraint_scale::Float64=1.0,
+    constraint_tol_raw::Float64=1e-8,
     sigma_init::Union{Nothing,Vector{Float64}}=nothing,
     robust_samples::Union{Nothing,Vector{Tuple{Float64,Float64}}}=nothing,
     robust_sharpness::Float64=200.0)
@@ -739,7 +761,7 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
 
             checkpoint_metadata = _iteration_checkpoint_metadata(epoch, total_epoch_evals,
                 epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-                checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness)
+                checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw)
             if checkpoint_metadata === nothing
                 save_checkpoint(prob, backup_path)
             else
@@ -817,7 +839,7 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
         epoch_evals[] += 1
         checkpoint_metadata = _iteration_checkpoint_metadata(epoch, epoch_evals[],
             epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness)
+            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw)
         log_iteration!(prob, g, p; backup=false, backup_every, backup_path, checkpoint_metadata)
 
         return -g   # standalone minimizes
@@ -840,13 +862,13 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
                 isempty(g) || (g .*= cs)
                 return cs * v
             end
-            push!(constraints, (scaled((p, g) -> glc_solid(p, g; sim=sim0, control=prob.control)), 1e-8 * cs))
-            push!(constraints, (scaled((p, g) -> glc_void(p, g; sim=sim0, control=prob.control)), 1e-8 * cs))
+            push!(constraints, (scaled((p, g) -> glc_solid(p, g; sim=sim0, control=prob.control)), constraint_tol_raw * cs))
+            push!(constraints, (scaled((p, g) -> glc_void(p, g; sim=sim0, control=prob.control)), constraint_tol_raw * cs))
         else
             sim0 = default_sim(prob.sim)
             obj = (; sim=sim0, control=prob.control, cache_pump=default_pool(prob.pool).filter_cache)
-            push!(constraints, ((p, g) -> glc_solid_fe(p, g, obj), 1e-8))
-            push!(constraints, ((p, g) -> glc_void_fe(p, g, obj), 1e-8))
+            push!(constraints, ((p, g) -> glc_solid_fe(p, g, obj), constraint_tol_raw))
+            push!(constraints, ((p, g) -> glc_void_fe(p, g, obj), constraint_tol_raw))
         end
     end
 
@@ -1172,6 +1194,7 @@ function _iteration_checkpoint_metadata(epoch::Int, epoch_evals::Int, max_iter::
     use_constraints::Union{Bool,Nothing},
     robust_samples=nothing,
     robust_sharpness=nothing;
+    constraint_tol_raw::Float64=1e-8,
     robust_mode::Symbol=:ks,
     epigraph_config=nothing,
     epigraph_tau=nothing,
@@ -1191,6 +1214,7 @@ function _iteration_checkpoint_metadata(epoch::Int, epoch_evals::Int, max_iter::
         robust_samples,
         robust_sharpness,
         use_constraints,
+        constraint_tol_raw,
         robust_mode,
         epigraph_config,
         epigraph_tau,
@@ -1243,6 +1267,7 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
     alpha_schedule::Union{Vector{Float64},Nothing}=nothing,
     backend::Union{Symbol,Nothing}=nothing,
     use_constraints::Union{Bool,Nothing}=nothing,
+    constraint_tol_raw::Float64=1e-8,
     mma_state_path::Union{String,Nothing}=nothing,
     robust_samples=nothing,
     robust_sharpness=nothing,
@@ -1277,6 +1302,7 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
         data["beta_schedule"] = copy(beta_schedule)
         data["alpha_schedule"] = alpha_schedule === nothing ? nothing : copy(alpha_schedule)
         data["backend"] = string(backend)
+        data["constraint_tol_raw"] = constraint_tol_raw
         data["use_constraints"] = use_constraints
         data["robust_samples"] = _robust_samples_matrix(robust_samples)
         data["robust_sharpness"] = (robust_samples === nothing || robust_sharpness === nothing) ? nothing : Float64(robust_sharpness)

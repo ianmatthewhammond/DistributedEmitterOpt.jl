@@ -21,16 +21,17 @@ mutable struct OptimizationProblem
     pde::NamedTuple
     root::String
     foundry_mode::Bool
+    sim::Nothing
 end
 problem() = OptimizationProblem([0.4,0.6], 0.0, zeros(2), 0, Float64[], -Inf,
-    zeros(2), FakeControl(8.0,1e-6), (;env=(;logger_cfg=nothing)), "unused", false)
+    zeros(2), FakeControl(8.0,1e-6), (;env=(;logger_cfg=nothing)), "unused", false, nothing)
 const checkpoints = NamedTuple[]
 const freed = Ref(0)
 const return_code = Ref(-1)
 struct MmaState end
 free_state!(::MmaState) = (freed[] += 1; nothing)
 _state_path(args...) = nothing
-_iteration_checkpoint_metadata(args...) = nothing
+_iteration_checkpoint_metadata(args...; kwargs...) = nothing
 _epigraph_config(args...) = nothing
 _robust_sharpness_record(args...) = nothing
 with_run_logger(f; kwargs...) = f()
@@ -48,16 +49,23 @@ function log_iteration!(prob, g, p; kwargs...)
     push!(prob.g_history, g)
 end
 save_checkpoint(prob, path; kwargs...) = push!(checkpoints, (;kwargs...))
+default_sim(sim) = sim
+glc_solid(p,g; kwargs...) = (isempty(g) || (g .= 2.0); 0.2)
+glc_void(p,g; kwargs...) = (isempty(g) || (g .= -3.0); -0.3)
 
 module MmaccsaBackend
 using ..PlainOptimizerFixture: return_code
+const captured_constraints = Ref{Any}(nothing)
 function minimize!(algorithm, objective, p; maxeval, kwargs...)
+    captured_constraints[] = kwargs[:constraints]
     n = return_code[] < 0 ? 3 : maxeval
     for _ in 1:n
         objective(p, similar(p))
     end
     return (return_code[], 0.0, n)
 end
+
+
 end
 
 # Evaluate the actual three production functions, with their bodies unchanged.
@@ -119,4 +127,31 @@ end
     @test length(F.checkpoints) == 2
     @test all(c.current_epoch == 1 && c.epoch_evals == 5 for c in F.checkpoints)
     @test F.freed[] == 1
+end
+
+if get(ENV,"TEST_RAW_TOLERANCE","0") == "1"
+    @testset "raw tolerance reaches both standalone constraints" begin
+        F.return_code[] = 5
+        for backend in (:standalone_mma,:standalone_ccsaq), raw in (1e-8,6e-14), cs in (1.0,1e8)
+            p=F.problem(); p.foundry_mode=true
+            F.optimize!(p;backend,max_iter=5,β_schedule=[Inf],use_constraints=true,
+                constraint_tol_raw=raw,constraint_scale=cs)
+            constraints=F.MmaccsaBackend.captured_constraints[]
+            @test length(constraints)==2
+            @test all(c[2]==raw*cs for c in constraints)
+            grad=zeros(2)
+            @test constraints[1][1](p.p,grad)==0.2cs
+            @test grad==fill(2cs,2)
+            @test constraints[2][1](p.p,grad)==-0.3cs
+            @test grad==fill(-3cs,2)
+        end
+        p=F.problem();p.foundry_mode=true
+        F.optimize!(p;backend=:standalone_mma,max_iter=5,β_schedule=[Inf],use_constraints=true)
+        @test all(c[2]==1e-8 for c in F.MmaccsaBackend.captured_constraints[])
+        for bad in (-1.0,NaN,Inf)
+            @test_throws ArgumentError F.optimize!(F.problem();constraint_tol_raw=bad)
+        end
+        @test_throws ArgumentError F.optimize!(F.problem();backend=:standalone_mma,
+            robust_mode=:epigraph, constraint_tol_raw=6e-14)
+    end
 end
