@@ -25,7 +25,13 @@ function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0
 
     des_low, des_high = getdesignz(sim.labels, sim.Ω)
 
-    PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α, env.bot_PEC)
+    pml = nothing
+    if !isnothing(env.pml)
+        z_bot, d_bot, z_top, d_top = getpmlz(sim.labels, sim.Ω)
+        pml = ZPMLParams(env.pml, ω, ns, nf, z_bot, d_bot, z_top, d_top)
+    end
+
+    PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α, env.bot_PEC, pml)
 end
 
 # ---------------------------------------------------------------------------
