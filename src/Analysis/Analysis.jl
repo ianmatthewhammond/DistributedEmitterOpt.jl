@@ -54,7 +54,8 @@ function spectral_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
         # TODO: Handle inelastic case more generally if needed
 
         # Create new inputs with updated wavelength
-        new_inputs = [FieldConfig(λ, θ=inp.θ, pol=inp.polarization) for inp in original_inputs]
+        new_inputs = [FieldConfig(λ; tilt_x=inp.tilt_x, tilt_y=inp.θ, pol=inp.polarization,
+            weight=inp.weight, n_incident=inp.n_incident, formulation=inp.formulation) for inp in original_inputs]
 
         # For outputs, if they are empty (elastic reuse), keep empty. 
         # If they exist (inelastic), we might need to shift them too? 

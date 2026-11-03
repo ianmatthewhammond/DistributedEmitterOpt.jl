@@ -54,6 +54,9 @@ mutable struct Simulation
     dir_y::Bool          # Dirichlet (PEC) in y
     source_y::Bool       # Source polarization direction
     labels::Any          # Face labeling
+    per_x::Bool
+    per_y::Bool
+    objective_normalization::Float64
 
     # Inner constructor for partial initialization
     Simulation() = new()
@@ -88,7 +91,9 @@ function build_simulation(meshfile::String;
     foundry_mode::Bool=true,
     sizes=nothing,
     model=nothing,
-    bot_PEC::Bool=false)
+    bot_PEC::Bool=false,
+    per_x=nothing,
+    per_y=nothing)
 
     sim = Simulation()
 
@@ -193,8 +198,48 @@ function build_simulation(meshfile::String;
     sim.dir_x = dir_x
     sim.dir_y = dir_y
     sim.source_y = source_y
+    px, py = mesh_periodic_axes(meshfile)
+    per_x !== nothing && Bool(per_x) != px && throw(ArgumentError("build_simulation: per_x disagrees with mesh periodic links"))
+    per_y !== nothing && Bool(per_y) != py && throw(ArgumentError("build_simulation: per_y disagrees with mesh periodic links"))
+    sim.per_x, sim.per_y = px, py
+    sim.objective_normalization = 1.0
+    px && dir_x && throw(ArgumentError("build_simulation: FacesX cannot be both periodic and PEC"))
+    py && dir_y && throw(ArgumentError("build_simulation: FacesY cannot be both periodic and PEC"))
 
     return sim
+end
+
+"Inspect the affine translations in the Gmsh Periodic section (not a caller's assertion)."
+function mesh_periodic_axes(meshfile)
+    lines = readlines(meshfile)
+    section = findfirst(==("\$Periodic"), lines)
+    section === nothing && return (false, false)
+    stop = findnext(==("\$EndPeriodic"), lines, section)
+    stop === nothing && throw(ArgumentError("mesh_periodic_axes: malformed Periodic section"))
+    tokens = split(join(lines[section+1:stop-1], " "))
+    i = 2
+    px = py = false
+    for _ in 1:parse(Int, tokens[1])
+        header = parse.(Int, tokens[i:i+2]); i += 3
+        n = parse(Int, tokens[i]); i += 1
+        affine = parse.(Float64, tokens[i:i+n-1]); i += n
+        if header[1] == 2 && n == 16
+            px |= abs(affine[4]) > 1e-12
+            py |= abs(affine[8]) > 1e-12
+        end
+        nn = parse(Int, tokens[i]); i += 1 + 2nn
+    end
+    px, py
+end
+
+function validate_field_boundaries(sim::Simulation, fc::FieldConfig)
+    fc.tilt_x != 0 && !sim.per_x && throw(ArgumentError("FieldConfig: tilt_x crosses mirror wall FacesX; a Bloch-periodic x mesh is required"))
+    fc.θ != 0 && !sim.per_y && throw(ArgumentError("FieldConfig: tilt_y crosses mirror wall FacesY; a Bloch-periodic y mesh is required"))
+    expected_x = fc.polarization == :x
+    expected_y = fc.polarization == :y
+    !sim.per_x && sim.dir_x != expected_x && throw(ArgumentError("FieldConfig: FacesX mirror must be $(expected_x ? "PEC" : "PMC") for $(fc.polarization) polarization"))
+    !sim.per_y && sim.dir_y != expected_y && throw(ArgumentError("FieldConfig: FacesY mirror must be $(expected_y ? "PEC" : "PMC") for $(fc.polarization) polarization"))
+    nothing
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════

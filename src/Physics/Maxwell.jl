@@ -85,6 +85,11 @@ function shifted_curl_op(u, k::Real, θ::Real)
     return curl_op ∘ (∇ₛ(u))
 end
 
+"Bloch curl of a periodic envelope; the bilinear test uses the opposite shift."
+function shifted_curl_op(u, κ::VectorValue)
+    (curl_op ∘ ∇(u)) + im * ((e -> cross(κ, e)) ∘ u)
+end
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Assembly
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -106,10 +111,55 @@ struct PhysicalParams
     α::Float64               # Artificial absorption
     bot_PEC::Bool        # bottom PEC or not
     pml::Union{Nothing,ZPMLParams}  # ±z PML (nothing = ABC only)
+    tilt_x::Float64          # x tilt (degrees); θ is the y tilt (see FieldConfig)
+    n_incident::Float64      # Lossless index of the medium the tilts are measured in
+    polarization::Symbol     # :x or :y transverse polarization (see FieldConfig)
+    formulation::Symbol      # :legacy (normal incidence only) or :bloch
 end
 
 PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC) =
     PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, nothing)
+PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, pml) =
+    PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, pml, 0.0, 1.0, :y, :legacy)
+
+"Outgoing normal wavenumber for exp(+iωt), including evanescent/lossy media."
+function outgoing_normal_wavenumber(k, ε, κ2)
+    q = sqrt(ComplexF64(k^2 * ε - κ2))
+    imag(q) > 0 || (imag(q) == 0 && real(q) < 0) ? -q : q
+end
+
+"Tangential specular-order admittance: TE=q, TM=k²ε/q. Other orders are approximate."
+function specular_admittance(k, ε, κ::VectorValue)
+    κ2 = real(κ[1]^2 + κ[2]^2)
+    q = outgoing_normal_wavenumber(k, ε, κ2)
+    abs(q) > eps(Float64)*k || throw(ArgumentError("specular_admittance: grazing boundary order"))
+    y11, y12, y22 = q + κ[1]^2/q, κ[1]*κ[2]/q, q + κ[2]^2/q
+    e -> VectorValue(y11*e[1] + y12*e[2], y12*e[1] + y22*e[2], 0.0im)
+end
+
+"""
+    assemble_bloch_maxwell(pt, sim, phys) -> SparseMatrix
+
+Corrected general-angle operator: Bloch-shifted curls (trial −κ, test +κ) and
+the tangential specular-order admittance on the top and bottom faces. The ±z
+PML is not implemented for this formulation and is refused.
+"""
+function assemble_bloch_maxwell(pt, sim, phys)
+    isnothing(phys.pml) || throw(ArgumentError("assemble_maxwell: the ±z PML is not implemented for the Bloch (general-angle) formulation; use Environment(pml=nothing) with tilted or explicitly-tilted FieldConfigs"))
+    k = phys.ω
+    κ = k * phys.n_incident * VectorValue(sind(phys.tilt_x), sind(phys.θ), 0.0)
+    ε₀ = x -> ε_background_wf(x, phys)
+    εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
+    top = specular_admittance(k, phys.nf^2*(1-im*phys.α), κ)
+    bottom = specular_admittance(k, phys.ns^2*(1-im*phys.α), κ)
+    assemble_matrix(sim.U, sim.V) do u, v
+        # exp(+iωt), physical field = envelope * exp(-iκ⋅r).
+        ∫(shifted_curl_op(v, κ) ⋅ shifted_curl_op(u, -κ))sim.dΩ -
+        k^2*∫(v ⋅ (ε₀*u))sim.dΩ - k^2*∫(v ⋅ (εₘ*u))sim.dΩ_design +
+        im*∫(v ⋅ (top ∘ u))sim.dS_top +
+        (phys.bot_PEC ? 0.0im : im)*∫(v ⋅ (bottom ∘ u))sim.dS_bottom
+    end
+end
 
 """
     assemble_maxwell(pt, sim, phys) -> SparseMatrix
@@ -124,6 +174,7 @@ With `phys.pml` set, the background terms carry the z-stretch tensors
 A = ∫ (∇×v)·(Λν ∇×u) dΩ - k²∫ ε₀ v·(Λε u) dΩ - k²∫ εₘ(p) v·u dΩ_d + ABC
 """
 function assemble_maxwell(pt, sim, phys::PhysicalParams)
+    phys.formulation == :bloch && return assemble_bloch_maxwell(pt, sim, phys)
     isnothing(phys.pml) || return assemble_maxwell_pml(pt, sim, phys)
     k = phys.ω
 
@@ -190,6 +241,17 @@ end
 Assemble source vector for plane wave incidence.
 """
 function assemble_source(sim, phys::PhysicalParams; source_y::Bool=true)
+    if phys.formulation == :bloch
+        fc = FieldConfig(2π/phys.ω; tilt_x=phys.tilt_x, tilt_y=phys.θ,
+                         pol=phys.polarization, n_incident=phys.n_incident)
+        Y = specular_admittance(phys.ω, phys.nf^2*(1-im*phys.α), inplane_wavevector(fc))
+        # A sheet radiates to both sides. Match the legacy half-unit incident
+        # electric-field amplitude for every angle and transverse polarization.
+        pol = im * Y(polarization_vector(fc))
+        return assemble_vector(sim.V) do v
+            ∫(v ⋅ pol)sim.dΓ_source
+        end
+    end
     Jxy = im * phys.ω * cosd(phys.θ)
 
     pol = source_y ? VectorValue(0, Jxy, 0) : VectorValue(Jxy, 0, 0)

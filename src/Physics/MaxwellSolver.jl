@@ -25,13 +25,19 @@ function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0
 
     des_low, des_high = getdesignz(sim.labels, sim.Ω)
 
+    validate_field_boundaries(sim, fc)
+    if fc.formulation == :bloch && (abs(imag(nf)) > 1e-12 || !isapprox(real(nf), fc.n_incident; atol=1e-12))
+        throw(ArgumentError("FieldConfig: n_incident must equal the lossless fluid index"))
+    end
+
     pml = nothing
     if !isnothing(env.pml)
         z_bot, d_bot, z_top, d_top = getpmlz(sim.labels, sim.Ω)
         pml = ZPMLParams(env.pml, ω, ns, nf, z_bot, d_bot, z_top, d_top)
     end
 
-    PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α, env.bot_PEC, pml)
+    PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α, env.bot_PEC, pml,
+        fc.tilt_x, fc.n_incident, fc.polarization, fc.formulation)
 end
 
 # ---------------------------------------------------------------------------
@@ -88,7 +94,7 @@ function solve_adjoint!(pde::MaxwellProblem, sources::Dict{CacheKey,Vector{Compl
     adjoints = Dict{CacheKey,CellField}()
 
     for (key, source) in sources
-        fc = FieldConfig(key[1]; θ=key[2], pol=key[3])
+        fc = field_config(key)
         sim_fc = sim_for(sim, fc)
         pool_fc = pool_for(pool, fc)
         cache = get_cache!(pool_fc, key)

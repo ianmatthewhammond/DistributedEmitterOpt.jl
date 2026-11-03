@@ -23,11 +23,18 @@ function objective_and_gradient!(∇g::Vector{Float64}, p::Vector{Float64},
     # Keep cached factors and let solver backends refactor in-place each call.
     # This avoids repeated destroy/recreate cycles (notably costly for Pardiso)
     # while still updating matrix values for the current design.
-    if prob.foundry_mode
-        return compute_gradient_2d_opt!(∇g, p, prob)
+    g = if prob.foundry_mode
+        compute_gradient_2d_opt!(∇g, p, prob)
     else
-        return compute_gradient_3d_opt!(∇g, p, prob)
+        compute_gradient_3d_opt!(∇g, p, prob)
     end
+    scale = default_sim(prob.sim).objective_normalization
+    if scale != 1.0
+        ∇g .*= scale
+        prob.∇g .*= scale
+        prob.g = scale*g
+    end
+    scale == 1.0 ? g : scale*g
 end
 
 # ---------------------------------------------------------------------------

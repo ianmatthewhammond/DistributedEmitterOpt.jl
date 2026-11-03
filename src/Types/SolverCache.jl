@@ -130,7 +130,7 @@ has_eigen_factor(cache::SolverCache) = !isnothing(cache.A_factor)
 # Cache Pool — deduplicates caches by (λ, θ, polarization) key
 # ═══════════════════════════════════════════════════════════════════════════════
 
-const CacheKey = Tuple{Float64,Float64,Symbol}
+const CacheKey = Union{Tuple{Float64,Float64,Symbol},Tuple{Float64,Float64,Symbol,Float64,Float64,Symbol}}
 
 """
     SolverCachePool{S<:AbstractSolver}

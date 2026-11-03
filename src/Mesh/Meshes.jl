@@ -265,7 +265,8 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    genmesh(geo, meshfile; per_x=false, per_y=false, pml=false) -> (des_low, des_high)
+    genmesh(geo, meshfile; per_x=false, per_y=false, pml=false,
+            structured_xy=nothing, center_xy=(0.0, 0.0)) -> (des_low, des_high)
 
 Generate periodic mesh using the legacy box point order (Emitter3DTopOpt).
 
@@ -273,8 +274,16 @@ With `pml=true`, a layer of thickness `geo.dpml` is added below the substrate
 (volume `PMLBottom`) and above the air (volume `PMLTop`). The physical layers
 keep the coordinates they have without it; `TopZ` / `BottomZ` move to the
 outer faces of the layers. Use with `Environment(pml=ZPML(...))`.
+
+`center_xy` moves the cell centre in x and y (`build_angular_simulation` puts a
+doubled periodic axis beside the independent patch). `structured_xy=(nx, ny)`
+meshes every box as structured hexahedra with `nx`/`ny` intervals across x/y,
+and also tags the CAD curves and points on the mirror walls as
+`FacesX`/`FacesY`. The defaults reproduce the legacy meshes exactly.
 """
-function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false, pml::Bool=false)
+function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false,
+                 pml::Bool=false, structured_xy::Union{Nothing,Tuple{Int,Int}}=nothing,
+                 center_xy::Tuple{Float64,Float64}=(0.0,0.0))
     pml && geo.dpml <= 0 && error("genmesh: pml=true needs geo.dpml > 0")
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 1)
@@ -285,28 +294,29 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
 
     tt = TagTracker()
     z0 = -(geo.hair + geo.hd + geo.hsub) / 2
-    L, R = -geo.L / 2, geo.L / 2
+    L, R = -geo.L / 2 + center_xy[1], geo.L / 2 + center_xy[1]
+    front, back = geo.W / 2 + center_xy[2], -geo.W / 2 + center_xy[2]
 
     # Bottom PML (optional), then substrate on top of it
-    ful = (L, geo.W / 2, z0 + geo.hsub, geo.l2)
-    fur = (R, geo.W / 2, z0 + geo.hsub, geo.l2)
-    bul = (L, -geo.W / 2, z0 + geo.hsub, geo.l2)
-    bur = (R, -geo.W / 2, z0 + geo.hsub, geo.l2)
+    ful = (L, front, z0 + geo.hsub, geo.l2)
+    fur = (R, front, z0 + geo.hsub, geo.l2)
+    bul = (L, back, z0 + geo.hsub, geo.l2)
+    bur = (R, back, z0 + geo.hsub, geo.l2)
     if pml
         zp = z0 - geo.dpml
         pml_bot_bx = box_legacy(tt,
-            (L, geo.W / 2, zp, geo.l3), (R, geo.W / 2, zp, geo.l3),
-            (L, geo.W / 2, z0, geo.l3), (R, geo.W / 2, z0, geo.l3),
-            (L, -geo.W / 2, zp, geo.l3), (R, -geo.W / 2, zp, geo.l3),
-            (L, -geo.W / 2, z0, geo.l3), (R, -geo.W / 2, z0, geo.l3))
+            (L, front, zp, geo.l3), (R, front, zp, geo.l3),
+            (L, front, z0, geo.l3), (R, front, z0, geo.l3),
+            (L, back, zp, geo.l3), (R, back, zp, geo.l3),
+            (L, back, z0, geo.l3), (R, back, z0, geo.l3))
         sub_bx = boxabove_legacy(pml_bot_bx, tt,
             pml_bot_bx.p_ful, pml_bot_bx.p_fur, ful, fur,
             pml_bot_bx.p_bul, pml_bot_bx.p_bur, bul, bur)
     else
-        fll = (L, geo.W / 2, z0, geo.l3)
-        flr = (R, geo.W / 2, z0, geo.l3)
-        bll = (L, -geo.W / 2, z0, geo.l3)
-        blr = (R, -geo.W / 2, z0, geo.l3)
+        fll = (L, front, z0, geo.l3)
+        flr = (R, front, z0, geo.l3)
+        bll = (L, back, z0, geo.l3)
+        blr = (R, back, z0, geo.l3)
         sub_bx = box_legacy(tt, fll, flr, ful, fur, bll, blr, bul, bur)
     end
     z0 += geo.hsub
@@ -314,10 +324,10 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
     des_low = z0
 
     # Design region
-    ful = (L, geo.W / 2, z0 + geo.hd, geo.l2)
-    fur = (R, geo.W / 2, z0 + geo.hd, geo.l2)
-    bul = (L, -geo.W / 2, z0 + geo.hd, geo.l2)
-    bur = (R, -geo.W / 2, z0 + geo.hd, geo.l2)
+    ful = (L, front, z0 + geo.hd, geo.l2)
+    fur = (R, front, z0 + geo.hd, geo.l2)
+    bul = (L, back, z0 + geo.hd, geo.l2)
+    bur = (R, back, z0 + geo.hd, geo.l2)
     des_bx = boxabove_legacy(sub_bx, tt,
         sub_bx.p_ful, sub_bx.p_fur, ful, fur,
         sub_bx.p_bul, sub_bx.p_bur, bul, bur)
@@ -325,28 +335,28 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
     des_high = z0
 
     # Target/Raman region
-    ful = (L, geo.W / 2, z0 + geo.ht, geo.l1)
-    fur = (R, geo.W / 2, z0 + geo.ht, geo.l1)
-    bul = (L, -geo.W / 2, z0 + geo.ht, geo.l1)
-    bur = (R, -geo.W / 2, z0 + geo.ht, geo.l1)
+    ful = (L, front, z0 + geo.ht, geo.l1)
+    fur = (R, front, z0 + geo.ht, geo.l1)
+    bul = (L, back, z0 + geo.ht, geo.l1)
+    bur = (R, back, z0 + geo.ht, geo.l1)
     tar_bx = boxabove_legacy(des_bx, tt,
         des_bx.p_ful, des_bx.p_fur, ful, fur,
         des_bx.p_bul, des_bx.p_bur, bul, bur)
 
     # Source region
-    ful = (L, geo.W / 2, z0 + geo.hs, geo.l1)
-    fur = (R, geo.W / 2, z0 + geo.hs, geo.l1)
-    bul = (L, -geo.W / 2, z0 + geo.hs, geo.l1)
-    bur = (R, -geo.W / 2, z0 + geo.hs, geo.l1)
+    ful = (L, front, z0 + geo.hs, geo.l1)
+    fur = (R, front, z0 + geo.hs, geo.l1)
+    bul = (L, back, z0 + geo.hs, geo.l1)
+    bur = (R, back, z0 + geo.hs, geo.l1)
     src_bx = boxabove_legacy(tar_bx, tt,
         tar_bx.p_ful, tar_bx.p_fur, ful, fur,
         tar_bx.p_bul, tar_bx.p_bur, bul, bur)
 
     # Air region
-    ful = (L, geo.W / 2, z0 + geo.hair, geo.l3)
-    fur = (R, geo.W / 2, z0 + geo.hair, geo.l1)
-    bul = (L, -geo.W / 2, z0 + geo.hair, geo.l3)
-    bur = (R, -geo.W / 2, z0 + geo.hair, geo.l3)
+    ful = (L, front, z0 + geo.hair, geo.l3)
+    fur = (R, front, z0 + geo.hair, geo.l1)
+    bul = (L, back, z0 + geo.hair, geo.l3)
+    bur = (R, back, z0 + geo.hair, geo.l3)
     air_bx = boxabove_legacy(src_bx, tt,
         src_bx.p_ful, src_bx.p_fur, ful, fur,
         src_bx.p_bul, src_bx.p_bur, bul, bur)
@@ -358,8 +368,8 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
     if pml
         zp = z0 + geo.dpml
         pml_top_bx = boxabove_legacy(air_bx, tt,
-            air_bx.p_ful, air_bx.p_fur, (L, geo.W / 2, zp, geo.l3), (R, geo.W / 2, zp, geo.l3),
-            air_bx.p_bul, air_bx.p_bur, (L, -geo.W / 2, zp, geo.l3), (R, -geo.W / 2, zp, geo.l3))
+            air_bx.p_ful, air_bx.p_fur, (L, front, zp, geo.l3), (R, front, zp, geo.l3),
+            air_bx.p_bul, air_bx.p_bur, (L, back, zp, geo.l3), (R, back, zp, geo.l3))
         bxs = [pml_bot_bx; bxs; pml_top_bx]
         bot_bx, top_bx = pml_bot_bx, pml_top_bx
     end
@@ -414,11 +424,45 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
     end
 
     gmsh.model.geo.synchronize()
+    if structured_xy !== nothing
+        nx,ny=structured_xy
+        min(nx,ny)>1 || throw(ArgumentError("genmesh: structured axes require at least two intervals"))
+        spacing=min(geo.l1,geo.l2,geo.l3)
+        for (_,tag) in gmsh.model.getEntities(1)
+            ends=gmsh.model.getBoundary([(1,tag)],false,false,false)
+            a=gmsh.model.getValue(0,ends[1][2],Float64[])
+            b=gmsh.model.getValue(0,ends[2][2],Float64[])
+            delta=abs.(a-b)
+            n=delta[1]>1e-8 ? nx : delta[2]>1e-8 ? ny : max(1,ceil(Int,delta[3]/spacing))
+            gmsh.model.mesh.setTransfiniteCurve(tag,n+1)
+        end
+        for (_,tag) in gmsh.model.getEntities(2)
+            gmsh.model.mesh.setTransfiniteSurface(tag)
+            gmsh.model.mesh.setRecombine(2,tag)
+        end
+        for (_,tag) in gmsh.model.getEntities(3)
+            gmsh.model.mesh.setTransfiniteVolume(tag)
+        end
+        # Essential tangential conditions also constrain CAD curves/vertices
+        # on the mirror. Gmsh assigns those their own entities, outside the
+        # surface-only physical groups used by the legacy generator.
+        for dim in (0,1), (name,axis,width) in (("FacesX",1,geo.L),("FacesY",2,geo.W))
+            tags=Int[]
+            for (_,tag) in gmsh.model.getEntities(dim)
+                box=gmsh.model.getBoundingBox(dim,tag)
+                if abs(box[axis]-box[axis+3])<1e-6 &&
+                   abs(abs((box[axis]+box[axis+3])/2-center_xy[axis])-width/2)<1e-6
+                    push!(tags,tag)
+                end
+            end
+            isempty(tags) || group(tt,dim,name,tags)
+        end
+    end
     gmsh.model.mesh.generate(3)
     gmsh.write(meshfile)
     gmsh.finalize()
 
-    @info "Mesh generated (legacy order): $meshfile"
+    @info "Mesh generated ($(structured_xy === nothing ? "legacy order" : "structured")): $meshfile"
 
     return (des_low, des_high)
 end

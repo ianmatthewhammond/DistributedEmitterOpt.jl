@@ -38,6 +38,7 @@ Construct the block matrices for the generalized eigenproblem:
     E = [N   0; 0   M]
 """
 function assemble_eigen_matrices(pt, sim, phys::EigenPhysicalParams)
+    phys.θ == 0 || throw(ArgumentError("assemble_eigen_matrices: oblique eigenmodes are unsupported; use the general-angle frequency-domain Maxwell solver"))
     ε₀ = x -> ε_background_wf(x, phys)
     √ε₀ = sqrt ∘ ε₀
     εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
