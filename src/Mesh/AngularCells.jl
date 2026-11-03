@@ -11,10 +11,17 @@ this builder does not claim separate half-cell factorizations for each angle.
 
 Objectives/gradients from OptimizationProblem are normalized to the independent
 patch area, so their scale does not depend on the selected field domain.
+
+The CAD curves and points on the mirror walls are tagged with the wall (see
+`genmesh`), so a PEC mirror constrains every tangential degree of freedom on
+it, for structured and unstructured (`structured=false`) meshes alike.
+`reuse_mesh=true` keeps an existing `meshfile` (a resumed run) instead of
+generating it again; the periodic axes are still read from the file.
 """
 function build_angular_simulation(geo::SymmetricGeometry, configs;
         meshfile::String, cell::Symbol=:auto, design_shape::Tuple{Int,Int}=(17,17),
-        order::Int=0, degree::Int=4, bot_PEC::Bool=false, structured::Bool=true)
+        order::Int=0, degree::Int=4, bot_PEC::Bool=false, structured::Bool=true,
+        reuse_mesh::Bool=false)
     isempty(configs) && throw(ArgumentError("build_angular_simulation: configs must not be empty"))
     cell in (:auto,:quarter,:half_x,:half_y,:full) || throw(ArgumentError("build_angular_simulation: unknown cell $cell"))
     all(>=(2), design_shape) || throw(ArgumentError("build_angular_simulation: design_shape entries must be at least 2"))
@@ -30,8 +37,9 @@ function build_angular_simulation(geo::SymmetricGeometry, configs;
     spacing=min(geo.l1,geo.l2,geo.l3)
     shape=structured ? (max(2,ceil(Int,geo.L/spacing))*(px ? 2 : 1),
                         max(2,ceil(Int,geo.W/spacing))*(py ? 2 : 1)) : nothing
-    genmesh(field_geo, meshfile; per_x=px, per_y=py,structured_xy=shape,
-            center_xy=(px ? geo.L/2 : 0.0,py ? geo.W/2 : 0.0))
+    (reuse_mesh && isfile(meshfile)) ||
+        genmesh(field_geo, meshfile; per_x=px, per_y=py,structured_xy=shape,
+                center_xy=(px ? geo.L/2 : 0.0,py ? geo.W/2 : 0.0), mirror_curves=true)
     bundle = build_simulation_bundle(meshfile; per_x=px,per_y=py,foundry_mode=true,order,degree,bot_PEC)
     for sim in values(bundle.by_pol)
         gx = collect(range(-geo.L/2,geo.L/2; length=design_shape[1]))

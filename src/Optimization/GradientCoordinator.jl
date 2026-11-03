@@ -31,7 +31,7 @@ function objective_and_gradient!(∇g::Vector{Float64}, p::Vector{Float64},
     scale = default_sim(prob.sim).objective_normalization
     if scale != 1.0
         ∇g .*= scale
-        prob.∇g .*= scale
+        ∇g === prob.∇g || (prob.∇g .*= scale)   # scale an aliased gradient once
         prob.g = scale*g
     end
     scale == 1.0 ? g : scale*g

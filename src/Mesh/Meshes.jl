@@ -266,7 +266,7 @@ end
 
 """
     genmesh(geo, meshfile; per_x=false, per_y=false, pml=false,
-            structured_xy=nothing, center_xy=(0.0, 0.0)) -> (des_low, des_high)
+            structured_xy=nothing, center_xy=(0.0, 0.0), mirror_curves=false) -> (des_low, des_high)
 
 Generate periodic mesh using the legacy box point order (Emitter3DTopOpt).
 
@@ -277,13 +277,16 @@ outer faces of the layers. Use with `Environment(pml=ZPML(...))`.
 
 `center_xy` moves the cell centre in x and y (`build_angular_simulation` puts a
 doubled periodic axis beside the independent patch). `structured_xy=(nx, ny)`
-meshes every box as structured hexahedra with `nx`/`ny` intervals across x/y,
-and also tags the CAD curves and points on the mirror walls as
-`FacesX`/`FacesY`. The defaults reproduce the legacy meshes exactly.
+meshes every box as structured hexahedra with `nx`/`ny` intervals across x/y.
+A structured mesh, or `mirror_curves=true` on an unstructured one, also tags
+the CAD curves and points that lie on the mirror walls as `FacesX`/`FacesY`,
+so an essential (PEC) wall constrains every tangential degree of freedom on
+it; the surface-only groups leave the edges along the box interfaces and the
+wall corners free. The defaults reproduce the legacy meshes exactly.
 """
 function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false,
                  pml::Bool=false, structured_xy::Union{Nothing,Tuple{Int,Int}}=nothing,
-                 center_xy::Tuple{Float64,Float64}=(0.0,0.0))
+                 center_xy::Tuple{Float64,Float64}=(0.0,0.0), mirror_curves::Bool=false)
     pml && geo.dpml <= 0 && error("genmesh: pml=true needs geo.dpml > 0")
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 1)
@@ -443,6 +446,8 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
         for (_,tag) in gmsh.model.getEntities(3)
             gmsh.model.mesh.setTransfiniteVolume(tag)
         end
+    end
+    if structured_xy !== nothing || mirror_curves
         # Essential tangential conditions also constrain CAD curves/vertices
         # on the mirror. Gmsh assigns those their own entities, outside the
         # surface-only physical groups used by the legacy generator.
