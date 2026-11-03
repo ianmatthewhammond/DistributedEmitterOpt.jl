@@ -136,7 +136,7 @@ end
 # ---------------------------------------------------------------------------
 
 function lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{ComplexF64,Int})
-    mtype = solver.assume_symmetric_maxwell ? solver.mtype_symmetric : solver.mtype
+    mtype = DistributedEmitterOpt.checked_maxwell_mtype(solver, A)
     # Match legacy behavior: custom iparm profile was used for unsymmetric Maxwell only.
     use_iparm = !solver.assume_symmetric_maxwell
     return new_pardiso_factor(solver, A, mtype; use_iparm)
@@ -147,7 +147,7 @@ function lu!(
     factor::PardisoFactor{ComplexF64},
     A::SparseMatrixCSC{ComplexF64,Int},
 )
-    mtype = solver.assume_symmetric_maxwell ? solver.mtype_symmetric : solver.mtype
+    mtype = DistributedEmitterOpt.checked_maxwell_mtype(solver, A)
     use_iparm = !solver.assume_symmetric_maxwell
     return refactor_pardiso!(solver, factor, A, mtype; use_iparm)
 end

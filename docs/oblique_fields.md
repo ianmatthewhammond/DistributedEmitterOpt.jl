@@ -6,7 +6,10 @@ physical downward ray is (sx,sy,-sqrt(1-sx²-sy²)); grazing/nonpropagating pair
 are rejected. `n_incident` is the lossless fluid index (air by default) and must
 match the environment. The time convention is exp(+iωt), material index n−ik,
 and physical E=envelope exp(−i k_parallel·r). The trial curl has the negative
-Bloch shift and the bilinear test curl has the positive shift.
+Bloch shift and the bilinear test curl has the positive shift. Oblique matrices
+are generally not complex symmetric. Use Pardiso `mtype=13` with
+`assume_symmetric_maxwell=false`; symmetric storage now checks the matrix before
+discarding a triangle and refuses incompatible operators.
 
 Polarization `:x` projects global x onto the transverse plane and normalizes it;
 `:y` completes the orthonormal basis. Thus x-plane tilt maps :x/:y to p/s, and
@@ -14,6 +17,12 @@ y-plane tilt maps them to s/p. Two-axis tilts have the documented Cartesian
 transverse basis rather than a silently selected s/p basis. Legacy `θ` still
 means y tilt. Old normal calls retain the legacy matrix/source path exactly;
 nonzero angles and explicit tilt keywords use the corrected formulation.
+Previous nonzero-θ numbers are deliberately corrected: the old operator had
+incorrect dispersion and boundary admittance. The low-level legacy
+`PhysicalParams` constructor refuses nonzero angles instead of silently using it.
+Mixed-polarization objective values can change even at normal incidence: the
+shared-model vector/material mapping correction removes projections that altered
+the forward fields and material while using inconsistent derivatives.
 
 ## Cells and design degrees of freedom
 
@@ -58,6 +67,11 @@ tensor, and intensity-only damage satisfy those mirrors. A fixed polarized
 pump generally breaks diagonal exchange even if the design has that symmetry.
 Without normal collection the count is 5. Cache keys include both tilts, index,
 polarization and formulation, and exclude objective weights.
+These counts use the corrected formulation for the pump too:
+`FieldConfig(λ; tilt_x=0, pol=:y)`. An old-style normal pump defaults to the
+legacy formulation and retains a distinct cache entry; mixing it with corrected
+normal collection adds one solve. Use explicit tilt keywords consistently for
+a new collection problem.
 
 ## Absorbing boundaries
 
@@ -86,11 +100,17 @@ Run `test/oblique_fresnel_tests.jl` for independent transfer-matrix R/T comparis
 (both axes and polarizations, 10° and 30°, mesh refinement), including the signed
 normal electric field fitted inside the substrate. H(curl) elements control the
 tangential boundary trace; normal boundary traces are unsuitable for that check.
+`test/oblique_film_reference_tests.jl` adds a free-wavenumber fit and complex
+reflection-vector gate on dielectric and lossy films, including two-axis tilts,
+source normalization and specular boundary returns.
 
 `test/oblique_gradient_tests.jl` checks foundry tv_void step ladders for x/y,
 both polarizations, two-axis full cells and a weighted signed collection, with
 damage off/on. `test/oblique_negative_control_tests.jl` deliberately uses an
 unconjugated adjoint and must fail the gradient criterion.
+`test/oblique_symmetric_adjoint_control_tests.jl` also rejects the old shortcut
+that assumes a complex symmetric operator. `test/oblique_solver_guard_tests.jl`
+checks matrix symmetry and refusal of incompatible Pardiso storage modes.
 `test/oblique_symmetry_tests.jl` checks transpose, signed angles, and half/full
 cells. `test/mixed_output_gradient_tests.jl` covers the corrected shared-model
 vector/material mapping. `scripts/benchmark_angular_solves.jl` compares local

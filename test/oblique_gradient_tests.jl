@@ -6,6 +6,8 @@ include("oblique_common.jl")
         @test !DEO.configs_equal(FieldConfig(532;tilt_x=20),FieldConfig(532;tilt_y=20))
         @test_throws ArgumentError FieldConfig(532;tilt_x=60,tilt_y=60)
         @test_throws ArgumentError FieldConfig(532;θ=20,formulation=:legacy)
+        @test_throws ArgumentError PhysicalParams(2pi/532,20,1.0+0im,2.0+0im,
+            1.5+0im,1.0,0.0,30.0,0.0,false)
         for tx in (0.0,20.0), ty in (0.0,15.0)
             fx=FieldConfig(532;tilt_x=tx,tilt_y=ty,pol=:x)
             fy=FieldConfig(532;tilt_x=tx,tilt_y=ty,pol=:y)

@@ -119,8 +119,10 @@ end
 
 PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC) =
     PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, nothing)
-PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, pml) =
+function PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, pml)
+    θ == 0 || throw(ArgumentError("PhysicalParams: the legacy constructor supports normal incidence only; use FieldConfig and build_phys_params for nonzero angles"))
     PhysicalParams(ω, θ, nf, nm, ns, μ, des_low, des_high, α, bot_PEC, pml, 0.0, 1.0, :y, :legacy)
+end
 
 "Outgoing normal wavenumber for exp(+iωt), including evanescent/lossy media."
 function outgoing_normal_wavenumber(k, ε, κ2)
@@ -175,6 +177,7 @@ A = ∫ (∇×v)·(Λν ∇×u) dΩ - k²∫ ε₀ v·(Λε u) dΩ - k²∫ ε�
 """
 function assemble_maxwell(pt, sim, phys::PhysicalParams)
     phys.formulation == :bloch && return assemble_bloch_maxwell(pt, sim, phys)
+    (phys.θ == 0 && phys.tilt_x == 0) || throw(ArgumentError("assemble_maxwell: legacy formulation is normal-incidence only"))
     isnothing(phys.pml) || return assemble_maxwell_pml(pt, sim, phys)
     k = phys.ω
 

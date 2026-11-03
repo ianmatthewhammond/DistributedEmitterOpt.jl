@@ -209,6 +209,7 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
 
     # 2. Solve fields for the first input config (nominal)
     config = prob.pde.inputs[1]
+    sim_fc = sim_for(sim, config)
 
     # Get solver cache
     pool_fc = pool_for(prob.pool, config)
@@ -216,7 +217,7 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
 
     # Assemble physics
     # Correct signature: build_phys_params(fc::FieldConfig, env::Environment, sim; α=0.0)
-    phys = build_phys_params(config, prob.pde.env, sim0; α=prob.pde.α_loss)
+    phys = build_phys_params(config, prob.pde.env, sim_fc; α=prob.pde.α_loss)
 
     # Manual forward solve for single config
     # 1. Factorize (if needed)
@@ -237,10 +238,10 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
     b = assemble_source(sim_for(sim, config), phys; source_y)
 
     E_vec = maxwell_solve!(cache, b)
-    uh = FEFunction(sim0.U, E_vec)  # Assuming sim0 for visualization
+    uh = FEFunction(sim_fc.U, E_vec)
 
     # 3. Write fields
-    Ω = sim0.Ω
+    Ω = sim_fc.Ω
 
     writevtk(Ω, joinpath(root, "fields"), cellfields=[
         "E_real" => real(uh),
