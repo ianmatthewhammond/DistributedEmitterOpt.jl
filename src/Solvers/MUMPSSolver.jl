@@ -5,7 +5,8 @@ Optional parallel sparse direct solver using MUMPS.
 Requires the user to independently install MUMPS.jl.
 
 The actual implementation is in ext/MUMPSExt.jl and only loads
-when MUMPS.jl is available. It initializes MPI when needed.
+when MUMPS.jl is available. With MUMPS.jl 1.6.1 and later it runs the sequential
+MUMPS build, which needs no MPI; with older versions it initializes MPI itself.
 """
 
 import SparseArrays: SparseMatrixCSC
