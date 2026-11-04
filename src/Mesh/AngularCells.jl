@@ -19,10 +19,11 @@ The CAD curves and points on the mirror walls are tagged with the wall (see
 it, for structured and unstructured (`structured=false`) meshes alike.
 `reuse_mesh=true` keeps an existing `meshfile` (a resumed run) instead of
 generating it again. Every generated mesh gets a recipe file (`meshfile * ".recipe"`)
-holding the genmesh inputs, and a reused mesh must match the recipe this call would
-write. A mesh without a recipe (generated before recipes existed) must show the
-expected extents and periodic links; a missing recipe and missing mirror-wall curve
-tags are warnings.
+holding the genmesh inputs and the SHA-256 of the mesh file. A reused mesh must match
+the recipe this call would write, have the recorded digest, and show the expected
+extents, periodic links and mirror-wall curve tags. A mesh without a recipe (generated
+before recipes existed) must show the expected extents and periodic links; a missing
+recipe and missing mirror-wall curve tags are warnings there.
 """
 function build_angular_simulation(geo::SymmetricGeometry, configs;
         meshfile::String, cell::Symbol=:auto, design_shape::Tuple{Int,Int}=(17,17),
@@ -87,7 +88,7 @@ mesh_recipe_path(meshfile) = meshfile * ".recipe"
 "The genmesh inputs that define an angular-cell mesh, as strings."
 function angular_mesh_recipe(field_geo::SymmetricGeometry, px, py, shape, center)
     recipe = Dict{String,String}(
-        "recipe" => "angular-cell-1",
+        "recipe" => "angular-cell-2",
         "per_x" => string(px), "per_y" => string(py), "mirror_curves" => "true",
         "structured" => shape === nothing ? "none" : "$(shape[1])x$(shape[2])",
         "center_x" => repr(Float64(center[1])), "center_y" => repr(Float64(center[2])))
@@ -97,12 +98,16 @@ function angular_mesh_recipe(field_geo::SymmetricGeometry, px, py, shape, center
     return recipe
 end
 
+mesh_digest(meshfile) = bytes2hex(open(sha256, meshfile))
+
+"Write the recipe of a generated mesh, with the SHA-256 of the mesh file as `mesh_sha256`."
 function write_mesh_recipe(meshfile, recipe)
     open(mesh_recipe_path(meshfile), "w") do io
         println(io, "# genmesh inputs written by build_angular_simulation; checked by reuse_mesh=true")
         for key in sort!(collect(keys(recipe)))
             println(io, key, " = ", recipe[key])
         end
+        println(io, "mesh_sha256 = ", mesh_digest(meshfile))
     end
 end
 
@@ -146,9 +151,21 @@ function check_reused_mesh(meshfile, expected, field_geo, center, px, py)
             same || push!(bad, "$key = $have (expected $want)")
         end
         isempty(bad) || throw(ArgumentError("build_angular_simulation: reuse_mesh recipe $path does not match this geometry and cell: " * join(bad, ", ")))
+        get(found, "mesh_sha256", "missing") == mesh_digest(meshfile) ||
+            throw(ArgumentError("build_angular_simulation: $meshfile is not the mesh its recipe $path was written for (SHA-256 differs); regenerate it"))
+        check_mesh_content(meshfile, field_geo, center, px, py) ||
+            throw(ArgumentError("build_angular_simulation: $meshfile has no mirror-wall curve tags, but its recipe says mirror_curves = true"))
         return nothing
     end
     # No recipe: a mesh from before recipes existed. Check what the mesh itself shows.
+    has_curves = check_mesh_content(meshfile, field_geo, center, px, py)
+    @warn "build_angular_simulation: reusing $meshfile without a recipe; checked its extents and periodic links only"
+    has_curves || @warn "build_angular_simulation: $meshfile has no mirror-wall curve tags (generated before mirror_curves); a PEC mirror leaves the tangential degrees of freedom on the wall curves free"
+    return nothing
+end
+
+"Check a mesh file's node extents and periodic axes against the cell; return whether it tags the mirror-wall curves."
+function check_mesh_content(meshfile, field_geo, center, px, py)
     height = field_geo.hair + field_geo.hd + field_geo.hsub
     want_lo = [center[1] - field_geo.L / 2, center[2] - field_geo.W / 2, -height / 2]
     want_hi = [center[1] + field_geo.L / 2, center[2] + field_geo.W / 2, height / 2]
@@ -157,9 +174,7 @@ function check_reused_mesh(meshfile, expected, field_geo, center, px, py)
         throw(ArgumentError("build_angular_simulation: reused mesh $meshfile spans $lo to $hi, expected $want_lo to $want_hi"))
     mesh_periodic_axes(meshfile) == (px, py) ||
         throw(ArgumentError("build_angular_simulation: reused mesh $meshfile has periodic axes $(mesh_periodic_axes(meshfile)), expected ($px, $py)"))
-    @warn "build_angular_simulation: reusing $meshfile without a recipe; checked its extents and periodic links only"
-    has_curves || @warn "build_angular_simulation: $meshfile has no mirror-wall curve tags (generated before mirror_curves); a PEC mirror leaves the tangential degrees of freedom on the wall curves free"
-    return nothing
+    return has_curves
 end
 
 """

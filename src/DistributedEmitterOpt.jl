@@ -14,6 +14,7 @@ module DistributedEmitterOpt
 using LinearAlgebra
 using SparseArrays
 using Random
+using SHA: sha256
 using Statistics: mean
 using KrylovKit
 using Zygote

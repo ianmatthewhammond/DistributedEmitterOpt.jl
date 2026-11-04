@@ -32,7 +32,7 @@ function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0
 
     if fc.formulation == :bloch
         check_diffraction_orders(lattice_periods(sim), fc, ns;
-            buffers=(sim.bounds[6] - des_high, des_low - sim.bounds[5]))
+            buffers=(sim.bounds[6] - des_high, des_low - sim.bounds[5]), bottom_pec=env.bot_PEC)
     end
 
     pml = nothing
@@ -49,28 +49,34 @@ end
 # Diffraction orders (Bloch formulation)
 # ---------------------------------------------------------------------------
 
+"An order with |q| ≤ CUTOFF_RTOL k |n| is at cutoff (it decays over more than about 160 wavelengths) and counts as propagating."
+const CUTOFF_RTOL = 1e-3
+
 """
-    check_diffraction_orders(periods, fc, ns; buffers=nothing)
+    check_diffraction_orders(periods, fc, ns; buffers=nothing, bottom_pec=false)
 
 The Bloch boundary terms are the specular-order admittance, exact for the specular wave
 only. Every nonspecular order (m, n) ≠ (0, 0) of the lattice, with in-plane wavevector
 κ + 2π (m/Px, n/Py), must be evanescent in the incidence medium (index `fc.n_incident`) and
 in the substrate (index `ns`); otherwise it reaches a boundary as a wave the admittance does
-not absorb, and this throws, naming the orders and the largest lattice periods (same aspect
-ratio) that keep every order evanescent. A substrate order counts as propagating when its
-normal wavenumber oscillates faster than it decays (|Re q| > |Im q|): lossless and low-loss
-substrates carry orders, a metal absorbs them.
+not absorb, and this throws, naming the orders and the lattice periods (same aspect ratio)
+below which every order is evanescent. An order counts as propagating when its normal
+wavenumber oscillates faster than it decays (|Re q| > |Im q|), or when it is at or near
+cutoff: |q| ≤ `CUTOFF_RTOL` k |n|, a decay length above about 160 wavelengths in the medium.
+Lossless and low-loss substrates carry orders, a metal absorbs them. A PEC bottom
+(`bottom_pec=true`) has no admittance term, so its substrate orders are not checked.
 
 `buffers = (d_top, d_bottom)` are the distances from the design region to the top and bottom
 faces; a warning is issued when the slowest-decaying evanescent order still has amplitude
-above 1e-2 at either face.
+above 1e-2 at either checked face.
 """
-function check_diffraction_orders(periods, fc::FieldConfig, ns::Number; buffers=nothing)
+function check_diffraction_orders(periods, fc::FieldConfig, ns::Number; buffers=nothing, bottom_pec::Bool=false)
     k = 2π / fc.λ
     κ = inplane_wavevector(fc)
     κx, κy = real(κ[1]), real(κ[2])
     Gx, Gy = 2π / periods[1], 2π / periods[2]
     media = (("incidence medium", complex(fc.n_incident)), ("substrate", complex(ns)))
+    bottom_pec && (media = media[1:1])
     kmax = k * maximum(abs(last(m)) for m in media) + hypot(κx, κy)
     M, N = ceil(Int, kmax / Gx) + 1, ceil(Int, kmax / Gy) + 1
     propagating = Tuple{Int,Int,String}[]
@@ -80,7 +86,7 @@ function check_diffraction_orders(periods, fc::FieldConfig, ns::Number; buffers=
         kt2 = (κx + m * Gx)^2 + (κy + n * Gy)^2
         for (i, (name, nmed)) in enumerate(media)
             q = outgoing_normal_wavenumber(k, nmed^2, kt2)
-            if abs(real(q)) > abs(imag(q))
+            if abs(real(q)) > abs(imag(q)) || abs(q) <= CUTOFF_RTOL * k * abs(nmed)
                 push!(propagating, (m, n, name))
             else
                 slowest[i] = min(slowest[i], abs(imag(q)))
@@ -90,11 +96,11 @@ function check_diffraction_orders(periods, fc::FieldConfig, ns::Number; buffers=
     if !isempty(propagating)
         sort!(propagating; by=o -> (abs(o[1]) + abs(o[2]), o[3]))
         indices = [real(fc.n_incident)]
-        abs(imag(ns)) < abs(real(ns)) && push!(indices, real(ns))
+        !bottom_pec && abs(imag(ns)) < abs(real(ns)) && push!(indices, real(ns))
         s = largest_evanescent_scale(periods, (κx, κy), k, indices)
         orders = join(["($(o[1]), $(o[2])) in the $(o[3])" for o in propagating[1:min(end, 6)]], ", ")
         r1(x) = round(x; digits=1)
-        throw(ArgumentError("$(repr(fc)): nonspecular diffraction order(s) $orders propagate at lattice periods $(r1(periods[1])) × $(r1(periods[2])) nm; the specular-order boundary does not absorb them. Largest lattice periods that keep every order evanescent (same aspect ratio): $(r1(s * periods[1])) × $(r1(s * periods[2])) nm. In build_angular_simulation, geo.L and geo.W are half the lattice period."))
+        throw(ArgumentError("$(repr(fc)): nonspecular diffraction order(s) $orders propagate or sit at cutoff at lattice periods $(r1(periods[1])) × $(r1(periods[2])) nm; the specular-order boundary does not absorb them. Every order is evanescent below lattice periods $(r1(s * periods[1])) × $(r1(s * periods[2])) nm (same aspect ratio). In build_angular_simulation, geo.L and geo.W are half the lattice period."))
     end
     if buffers !== nothing
         for (i, (name, _)) in enumerate(media)
