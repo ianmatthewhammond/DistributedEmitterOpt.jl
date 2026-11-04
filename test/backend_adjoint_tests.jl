@@ -135,7 +135,7 @@ end
             @test solve_sequence(s2, f, 2M, rng) < 1e-11
             DEO.release_factor!(s2, f)
         end
-        # The MPI backend, the only one before MUMPS.jl 1.6.1, next to the sequential default
+        # The MPI backend next to the sequential default, where MUMPS.jl has both (1.7.1)
         if ext.HAS_SEQUENTIAL
             f = DEO.lu!(s, B)
             @test f.sequential

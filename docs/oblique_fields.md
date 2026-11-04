@@ -14,14 +14,14 @@ Symmetric storage (Pardiso symmetric mtypes, MUMPS `symmetric=true`) checks the
 matrix before discarding a triangle and refuses incompatible operators.
 
 The MUMPS extension (MUMPS.jl 1.x) runs the sequential MUMPS build, which needs no
-MPI, on MUMPS.jl 1.6.1 and later, and MUMPS on one MPI rank (initializing MPI)
-before that. It drives the MUMPS job itself, because MUMPS.jl's solve call returns
-without solving on an instance that has solved already: every right-hand side runs a
-solve, and new values on an unchanged sparsity pattern reuse the analysis. Each
-phase checks INFOG(1), and a factorization that runs out of workspace is retried
-with ICNTL(14) doubled. MUMPS memory lives outside Julia's GC, so factors are
-released explicitly (and before MPI is finalized at exit). Output is limited to
-errors unless `MUMPSSolver(verbose=true)`.
+MPI, when MUMPS.jl has a `Sequential` backend (1.7.1 does), and MUMPS on one MPI
+rank (initializing MPI) otherwise, as with 1.6.1. It drives the MUMPS job itself,
+because MUMPS.jl's solve call returns without solving on an instance that has solved
+already: every right-hand side runs a solve, and new values on an unchanged sparsity
+pattern reuse the analysis. Each phase checks INFOG(1), and a factorization that
+runs out of workspace is retried with ICNTL(14) doubled. MUMPS memory lives outside
+Julia's GC, so factors are released explicitly (and before MPI is finalized at
+exit). Output is limited to errors unless `MUMPSSolver(verbose=true)`.
 
 Polarization `:x` projects global x onto the transverse plane and normalizes it;
 `:y` completes the orthonormal basis. Thus x-plane tilt maps :x/:y to p/s, and
