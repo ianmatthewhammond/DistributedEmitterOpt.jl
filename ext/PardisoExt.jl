@@ -6,14 +6,16 @@ extension loads with Pardiso.jl alone and runs where MKL does (x86-64 Linux, for
 where MKL is not available, such as on Apple Silicon, use `UmfpackSolver()`.
 
 Pardiso reads Julia's CSC arrays as CSR, so it sees Aᵀ. A matrix stored in full (Maxwell
-mtype 13, the default, and filter mtype 11) is solved on one factorization as
+mtype 13 and filter mtype 11) is solved on one factorization as
 
     A x = b   →  transposed solve of what Pardiso sees                 (iparm(12) = 2)
     Aᴴ x = b  ⇔  Aᵀ conj(x) = conj(b)  →  plain solve (iparm(12) = 0) on conj(b), conjugated
 
 so oblique Bloch operators, which are not complex symmetric, get true adjoints. Symmetric
-types keep one triangle (Maxwell mtype 6 with `assume_symmetric_maxwell=true`, filter mtypes
--2 and 2) and are used only for a matrix checked to be symmetric.
+types keep one triangle and are used only for a matrix checked to be symmetric: Maxwell
+mtype 6, which `checked_maxwell_mtype` picks by default for each factorization whose
+matrix is complex symmetric (normal incidence), and filter mtypes -2 and 2. For them the
+same plain solve on conj(b) is the exact adjoint.
 
 The analysis is reused while the sparsity pattern matches a copy taken when it ran. A factor
 is released once, by `release_factor!` or when its factorization fails. A dropped factor is
@@ -55,7 +57,7 @@ forward_mode(mtype::Int) = one_triangle(mtype) ? 0 : 2
 function maxwell_mtype(solver::DistributedEmitterOpt.PardisoSolver, A)
     mtype = DistributedEmitterOpt.checked_maxwell_mtype(solver, A)
     mtype in (13, 6) ||
-        throw(ArgumentError("PardisoSolver: Maxwell mtype=$mtype is not supported; use 13 (default), or 6 with assume_symmetric_maxwell=true"))
+        throw(ArgumentError("PardisoSolver: Maxwell mtype=$mtype is not supported; use 13 and 6 (the defaults of mtype and mtype_symmetric)"))
     return mtype
 end
 
@@ -139,10 +141,11 @@ end
 # Interface implementation
 # ---------------------------------------------------------------------------
 
-# Legacy behaviour: the iparm profile applies to unsymmetric Maxwell solves only.
+# As before, the iparm profile applies to unsymmetric (full-storage) Maxwell factorizations;
+# a symmetric type keeps MKL's defaults.
 function lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{ComplexF64,Int})
     mtype = maxwell_mtype(solver, A)
-    return new_factor(solver, storage(A, mtype), mtype; use_iparm=!solver.assume_symmetric_maxwell)
+    return new_factor(solver, storage(A, mtype), mtype; use_iparm=!one_triangle(mtype))
 end
 
 function lu!(
@@ -150,7 +153,8 @@ function lu!(
     factor::PardisoFactor{ComplexF64},
     A::SparseMatrixCSC{ComplexF64,Int},
 )
-    return refactor(solver, factor, A, maxwell_mtype(solver, A); use_iparm=!solver.assume_symmetric_maxwell)
+    mtype = maxwell_mtype(solver, A)
+    return refactor(solver, factor, A, mtype; use_iparm=!one_triangle(mtype))
 end
 
 function filter_lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{Float64,Int})

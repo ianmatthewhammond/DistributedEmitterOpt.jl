@@ -70,15 +70,19 @@ relres(r, b) = norm(r) / norm(b)
         @test relres(B * DEO.solve!(s, h, bB) - bB, bB) < 1e-11
         DEO.release_factor!(s, h)
 
-        # Complex symmetric storage (mtype 6) keeps one triangle.
-        s6 = PardisoSolver(assume_symmetric_maxwell=true)
-        for (M, rhs) in ((S, b), (B + transpose(B), bB))
+        # A complex symmetric matrix gets complex symmetric storage (mtype 6, one triangle) by
+        # default and when forced; a non-symmetric one gets mtype 13 unless 6 is forced.
+        @test DEO.lu!(s, B).mtype == 13
+        @test DEO.lu!(PardisoSolver(assume_symmetric_maxwell=false), S).mtype == 13
+        for s6 in (PardisoSolver(), PardisoSolver(assume_symmetric_maxwell=true)),
+            (M, rhs) in ((S, b), (B + transpose(B), bB))
             f = DEO.lu!(s6, M)
+            @test f.mtype == 6
             @test relres(M * DEO.solve!(s6, f, rhs) - rhs, rhs) < 1e-11
             @test relres(M' * DEO.solve_adjoint!(s6, f, rhs) - rhs, rhs) < 1e-11
             DEO.release_factor!(s6, f)
         end
-        @test_throws ArgumentError DEO.lu!(s6, B)
+        @test_throws ArgumentError DEO.lu!(PardisoSolver(assume_symmetric_maxwell=true), B)
         @test_throws ArgumentError DEO.lu!(PardisoSolver(mtype=4), sparse(ComplexF64[2 1+im; 1-im 3]))
     end
 
@@ -108,6 +112,11 @@ relres(r, b) = norm(r) / norm(b)
     end
 
     # Decisions in src, independent of the extensions
+    @test DEO.symmetry_defect(B) ≈ norm(B - transpose(B)) / norm(B)   # also one-sided entries
+    @test DEO.symmetry_defect(S) == 0
+    @test DEO.symmetry_defect(Rs) == 0
+    @test DEO.checked_maxwell_mtype(PardisoSolver(), B + transpose(B)) == 6
+    @test DEO.checked_maxwell_mtype(PardisoSolver(), B) == 13
     @test DEO.checked_mumps_sym(false, A) == 0
     @test DEO.checked_mumps_sym(true, S) == 2
     @test_throws ArgumentError DEO.checked_mumps_sym(true, A)
