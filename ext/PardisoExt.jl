@@ -25,6 +25,7 @@ mutable struct PardisoFactor{T}
     mtype::Int
     pattern_hash::UInt
     released::Bool
+    symmetric::Bool   # full matrix was (complex) symmetric: the conj-solve adjoint is valid
 end
 
 is_symmetric_mtype(mtype::Int) = mtype in (1, 2, -2, 3, 4, -4, 6)
@@ -89,12 +90,14 @@ function new_pardiso_factor(
     use_iparm::Bool,
 ) where T
     log_pardiso_mem("new_factor:start")
+    # Decided on the full matrix, before a symmetric mtype keeps only one triangle.
+    symmetric = DistributedEmitterOpt.pardiso_shortcut_adjoint_ok(A)
     Awork = matrix_for_mtype(A, mtype)
     psolver = gridap_solver(solver, mtype; use_iparm)
     symbolic = GridapPardiso.symbolic_setup(psolver, Awork)
     numerical = GridapPardiso.numerical_setup(symbolic, Awork)
 
-    factor = PardisoFactor{T}(symbolic, numerical, psolver, Awork, mtype, sparsity_hash(Awork, mtype), false)
+    factor = PardisoFactor{T}(symbolic, numerical, psolver, Awork, mtype, sparsity_hash(Awork, mtype), false, symmetric)
     finalizer(release_pardiso!, factor)
     log_pardiso_mem("new_factor:done")
     return factor
@@ -119,6 +122,7 @@ function refactor_pardiso!(
 
     if can_reuse_symbolic
         factor.numerical = GridapPardiso.numerical_setup(factor.symbolic, Awork)
+        factor.symmetric = DistributedEmitterOpt.pardiso_shortcut_adjoint_ok(A)
         factor.A = Awork
         factor.pattern_hash = new_hash
         factor.released = false
@@ -171,7 +175,9 @@ function solve!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T},
 end
 
 function solve_adjoint!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
-    # Match legacy solveconj path: x = conj(solve(A, conj(b))).
+    # Match legacy solveconj path: x = conj(solve(A, conj(b))). This is Aᴴ⁻¹ b only for Aᵀ = A,
+    # so a factor of a non-symmetric (oblique) matrix is refused rather than solved wrongly.
+    DistributedEmitterOpt.check_pardiso_adjoint(factor.symmetric)
     x = similar(b)
     GridapPardiso.solve!(x, factor.numerical, conj.(b))
     return conj.(x)

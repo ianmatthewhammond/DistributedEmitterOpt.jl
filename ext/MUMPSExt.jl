@@ -2,13 +2,16 @@
     MUMPSExt
 
 Package extension that provides the actual MUMPS solver implementation.
-This file is only loaded when the user has MUMPS.jl installed.
+This file is only loaded when the user has MUMPS.jl installed. MUMPS.jl requires
+`MPI.Init()` before a solver instance is created.
 """
 module MUMPSExt
 
+import DistributedEmitterOpt
 using DistributedEmitterOpt: AbstractSolver, MUMPSSolver
 import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!
-using MUMPS
+import MUMPS
+using MUMPS: Mumps, associate_matrix!, associate_rhs!, factorize!
 using SparseArrays: SparseMatrixCSC
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -27,13 +30,11 @@ mutable struct MUMPSFactor{T}
 end
 
 function MUMPSFactor(A::SparseMatrixCSC{T}; symmetric::Bool=false) where T
-    # MUMPS job types:
-    #  icntl[4] = 0 (no output), 1 (errors only), 2 (warnings+errors), 3 (full)
-    # sym = 0 (unsymmetric), 1 (symmetric positive def), 2 (general symmetric)
-    sym = symmetric ? 2 : 0
-    mumps = Mumps{T}(sym, default_icntl, default_cntl)
+    # sym = 0 (unsymmetric) or 2 (general symmetric, refused for a non-symmetric A)
+    sym = DistributedEmitterOpt.checked_mumps_sym(symmetric, A)
+    mumps = Mumps{T}(sym)
 
-    # Associate matrix (analysis phase)
+    # Associate matrix, then analysis + factorization
     associate_matrix!(mumps, A)
     factorize!(mumps)
 
@@ -58,25 +59,22 @@ end
 function solve!(::MUMPSSolver, factor::MUMPSFactor{T}, b::Vector{T}) where T
     x = copy(b)
     associate_rhs!(factor.mumps, x)
-    solve!(factor.mumps)
-    get_solution!(factor.mumps, x)
+    MUMPS.solve!(factor.mumps)
+    MUMPS.get_sol!(x, factor.mumps)
     return x
 end
 
-"""Solve A'x = b (adjoint/transpose system)."""
+"""
+Solve Aᴴ x = b (adjoint system). MUMPS's transposed solve (ICNTL(9) ≠ 1) uses the
+plain transpose Aᵀ and never conjugates, so the complex case solves
+Aᵀ conj(x) = conj(b); the real case is the transposed solve itself.
+"""
 function solve_adjoint!(::MUMPSSolver, factor::MUMPSFactor{T}, b::Vector{T}) where T
-    # MUMPS: icntl[9] = 1 for A^T solve, 2 for A^H solve
-    # For complex matrices, we want conjugate transpose (Hermitian adjoint)
-    old_icntl9 = factor.mumps.icntl[9]
-    factor.mumps.icntl[9] = T <: Complex ? 2 : 1
-
-    x = copy(b)
+    x = T <: Complex ? conj.(b) : copy(b)
     associate_rhs!(factor.mumps, x)
-    solve!(factor.mumps)
-    get_solution!(factor.mumps, x)
-
-    factor.mumps.icntl[9] = old_icntl9
-    return x
+    MUMPS.solve!(factor.mumps; transposed=true)
+    MUMPS.get_sol!(x, factor.mumps)
+    return T <: Complex ? conj!(x) : x
 end
 
 end # module
