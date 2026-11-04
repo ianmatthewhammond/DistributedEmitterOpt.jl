@@ -86,10 +86,12 @@ end
 # substrate is only 30 nm thick, so the field at the bottom face is about a quarter of its
 # surface value: the bottom specular admittance must take the decaying q branch of the lossy
 # medium, or the reflection moves. The substrate field decays, so only the air zone is fitted.
+# Keep at least six air elements across the periodic cell: a coarser periodic mesh can merge
+# distinct edges and carry no propagating field.
 function lossy_substrate(; λ=532.0, order=1, Lc=60.0)
     nsub = sqrt(complex(-15.1, -2.43)); real(nsub) < 0 && (nsub = -nsub)
     geo = SymmetricGeometry(λ; L=Lc, W=Lc, hd=20.0, hsub=30.0)
-    geo.hair = 520.0; geo.hs = 330.0; geo.ht = 150.0; geo.l1 = 20.0; geo.l2 = 3.0; geo.l3 = 4.0
+    geo.hair = 520.0; geo.hs = 330.0; geo.ht = 150.0; geo.l1 = 10.0; geo.l2 = 4.0; geo.l3 = 5.0
     mesh = joinpath(mktempdir(), "metal.msh")
     lo, hi = genmesh(geo, mesh; per_x=true, per_y=true)
     sim = build_simulation(mesh; order, dir_x=false, dir_y=false, foundry_mode=false, degree=4)
