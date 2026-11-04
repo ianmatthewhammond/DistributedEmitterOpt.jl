@@ -30,6 +30,25 @@ const DEO = DistributedEmitterOpt
     @test DEO.check_diffraction_orders((300.0, 300.0), FieldConfig(λ; tilt_y=0, pol=:y), metal) === nothing
     @test !isempty(message(() -> DEO.check_diffraction_orders((330.0, 330.0), FieldConfig(λ; tilt_y=0, pol=:y), metal)))
 
+    # A PEC bottom has no admittance term, so its substrate orders are not checked: the lossless
+    # 1.45 substrate that carries (0, -1) at 170 nm is fine there. The incidence medium still is.
+    for pol in (:x, :y)
+        fc = FieldConfig(λ; tilt_y=45, pol)
+        @test DEO.check_diffraction_orders((170.0, 170.0), fc, 1.45 + 0im; bottom_pec=true) === nothing
+        msg = message(() -> DEO.check_diffraction_orders((340.0, 340.0), fc, 1.45 + 0im; bottom_pec=true))
+        @test occursin("(0, -1) in the incidence medium", msg)
+        @test !occursin("substrate", msg)
+    end
+
+    # Orders at cutoff (q = 0) do not decay: refused, as is an order within the cutoff
+    # tolerance; one clearly below cutoff passes.
+    normal = FieldConfig(λ; tilt_y=0, pol=:y)
+    msg = message(() -> DEO.check_diffraction_orders((λ, λ), normal, metal))
+    println("GUARD cutoff P = λ: ", msg)
+    @test occursin("in the incidence medium", msg)
+    @test !isempty(message(() -> DEO.check_diffraction_orders((λ * (1 - 1e-8), λ * (1 - 1e-8)), normal, metal)))
+    @test DEO.check_diffraction_orders((0.99λ, 0.99λ), normal, metal) === nothing
+
     # Through the builder and build_phys_params. "Al" from the material data is a lossy substrate.
     env = Environment(mat_design="Al", mat_substrate="Al", mat_fluid=1.0)
     for (box, ok) in ((85.0, true), (170.0, false))
@@ -45,6 +64,15 @@ const DEO = DistributedEmitterOpt
             @test DEO.build_phys_params(fc, env, s) isa DEO.PhysicalParams
         else
             @test_throws ArgumentError DEO.build_phys_params(fc, env, s)
+        end
+        if ok
+            # A dielectric substrate is refused at this period unless the bottom is PEC.
+            glass = Environment(mat_design="Al", mat_substrate=1.45, mat_fluid=1.0)
+            @test_throws ArgumentError DEO.build_phys_params(fc, glass, s)
+            pec = build_angular_simulation(geo, [fc]; meshfile=joinpath(mktempdir(), "pec.msh"),
+                design_shape=(5, 5), structured=false, bot_PEC=true)
+            backed = Environment(mat_design="Al", mat_substrate=1.45, mat_fluid=1.0, bot_PEC=true)
+            @test DEO.build_phys_params(fc, backed, DEO.sim_for(pec, fc)) isa DEO.PhysicalParams
         end
     end
 end
