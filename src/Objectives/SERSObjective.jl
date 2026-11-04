@@ -330,8 +330,7 @@ function explicit_sensitivity(obj::SERSObjective, pde::MaxwellProblem, fields::D
     end
 
     if obj.surface && obj.surface_mode == :tv_void
-        dens = shell_explicit_density(obj, pde, fields, pt, sim)
-        if dens !== nothing
+        for dens in shell_density_terms(obj, pde, fields, pt, sim)
             ∇pf0 = ∇(pf)
             ∂g_∂pf .+= assemble_vector(sim_base.Pf) do v
                 ∫(dpt_dpf_field(v, pf, control, sim_base.Ω_design) *
@@ -403,8 +402,7 @@ function explicit_sensitivity_pt(obj::SERSObjective, pde::MaxwellProblem, fields
     end
 
     if obj.surface && obj.surface_mode == :tv_void
-        dens = shell_explicit_density(obj, pde, fields, pt, sim)
-        if dens !== nothing
+        for dens in shell_density_terms(obj, pde, fields, pt, sim)
             ∂g_∂pt .+= assemble_vector(sim_base.Pf) do v
                 ∫(v * dens)sim_base.dΩ_design
             end
@@ -473,8 +471,9 @@ function explicit_sensitivity_pt_grid!(out::Vector{Float64},
     end
 
     if obj.surface && obj.surface_mode == :tv_void
-        dens = shell_explicit_density(obj, pde, fields, pt, sim)
-        dens === nothing || accumulate_density_to_grid!(out, sim_base.grid, sim_base.dΩ_design, dens)
+        for dens in shell_density_terms(obj, pde, fields, pt, sim)
+            accumulate_density_to_grid!(out, sim_base.grid, sim_base.dΩ_design, dens)
+        end
     end
 
     return out

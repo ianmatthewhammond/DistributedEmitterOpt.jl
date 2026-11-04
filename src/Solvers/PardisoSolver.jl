@@ -53,6 +53,33 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     iparm::Union{Nothing,Vector{Int}} = legacy_pardiso_iparm()
 end
 
+"Validate a Maxwell matrix before a symmetric storage mode discards a triangle."
+function checked_maxwell_mtype(solver::PardisoSolver, A)
+    mtype = solver.assume_symmetric_maxwell ? solver.mtype_symmetric : solver.mtype
+    if mtype in (1, 2, -2, 3, 4, -4, 6)
+        reflected = mtype in (4, -4) ? adjoint(A) : transpose(A)
+        norm(A - reflected) <= 1e-12 * norm(A) ||
+            throw(ArgumentError("PardisoSolver: Maxwell matrix is incompatible with symmetric mtype=$mtype; oblique Bloch fields require assume_symmetric_maxwell=false and mtype=13"))
+    end
+    return mtype
+end
+
+"""
+    pardiso_shortcut_adjoint_ok(A) -> Bool
+
+The extension's adjoint is the legacy conj(A⁻¹ conj b), which equals the required
+Aᴴ⁻¹ b only when A is complex symmetric (Aᵀ = A). That holds for normal-incidence
+Maxwell matrices and the symmetric filter, not for oblique Bloch operators, where
+A(κ)ᵀ = A(−κ). Each factorization records this for `check_pardiso_adjoint`.
+"""
+pardiso_shortcut_adjoint_ok(A) = norm(A - transpose(A)) <= 1e-12 * norm(A)
+
+"Refuse the conj(A⁻¹ conj b) adjoint for a factor whose matrix was not complex symmetric."
+function check_pardiso_adjoint(symmetric::Bool)
+    symmetric || throw(ArgumentError("PardisoSolver: the adjoint of a non-symmetric Maxwell matrix (oblique Bloch fields) needs a conjugate-transposed solve, which this backend does not implement; use UmfpackSolver() for oblique problems"))
+    return nothing
+end
+
 # Stub implementations that error if extension not loaded
 function lu!(::PardisoSolver, A::SparseMatrixCSC)
     error("Pardiso extension not loaded. Install with: using Pkg; Pkg.add(\"Pardiso\"); Pkg.add(\"GridapPardiso\")")

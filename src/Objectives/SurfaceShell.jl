@@ -229,3 +229,60 @@ function shell_explicit_density(obj, pde::MaxwellProblem, fields::Dict, pt, sim)
     λ_h = FEFunction(sim0.Pf, c.F \ r)
     return direct + λ_h
 end
+
+
+# Assemble multi-angle direct densities separately. A nested lazy sum gives
+# Julia a progressively deeper concrete expression type and excessive JIT work.
+function shell_explicit_terms(obj, pde::MaxwellProblem, fields::Dict, pt, sim)
+    sim0 = default_sim(sim)
+    n, û, _, _ = shell_weights(obj, pt, sim0)
+    pt_cf = _pt_cf(pt, sim0)
+    inputs = pde.inputs
+    outputs = effective_outputs(pde)
+
+    terms = CellField[]
+    r = zeros(Float64, num_free_dofs(sim0.Pf))
+    for fc_in in inputs
+        key_in = cache_key(fc_in)
+        haskey(fields, key_in) || continue
+        sim_in = sim_for(sim, fc_in)
+        Ep = fields[key_in]
+        for fc_out in outputs
+            key_out = cache_key(fc_out)
+            haskey(fields, key_out) || continue
+            sim_out = sim_for(sim, fc_out)
+            _shell_check_single_sim(sim, sim_out)
+            Ee = fields[key_out]
+            weight = fc_in.weight * fc_out.weight
+            Ep_out = sim_out === sim_in ? Ep : map_field(Ep, sim_out, :U)
+            dmg = if obj.use_damage_model
+                (u -> damage_factor(u; γ=obj.γ_damage, E_th=obj.E_threshold)) ∘ (sumabs2 ∘ Ep_out)
+            else
+                1.0
+            end
+            αc1, αc2 = α_cellfields(obj.αₚ, sim_out.Ω)
+            I_re = real(α̂ₚ² ∘ (Ee, Ee', Ep_out, Ep_out, αc1, αc2))
+
+            d = (-2.0 * weight) * dmg * I_re * n
+            push!(terms,d)
+
+            r .+= weight .* assemble_vector(sim0.Pf) do v
+                ∫(2.0 * dmg * I_re * (û ⋅ ∇(v)))sim0.dΩ_raman +
+                ∫(2.0 * (1.0 - pt_cf) * dmg * I_re * (û ⋅ ∇(v)))sim0.dΩ_design
+            end
+        end
+    end
+    isempty(terms) && return terms
+    c = shell_factor!(obj, sim0)
+    λ_h = FEFunction(sim0.Pf, c.F \ r)
+    push!(terms,λ_h)
+    return terms
+end
+
+function shell_density_terms(obj,pde,fields,pt,sim)
+    if length(pde.inputs)*length(effective_outputs(pde)) == 1
+        density=shell_explicit_density(obj,pde,fields,pt,sim)
+        return density === nothing ? CellField[] : CellField[density]
+    end
+    shell_explicit_terms(obj,pde,fields,pt,sim)
+end
