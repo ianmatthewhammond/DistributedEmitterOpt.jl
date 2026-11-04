@@ -14,6 +14,14 @@ refuses the factor of a non-symmetric matrix; use UMFPACK for oblique problems.
 Symmetric storage (Pardiso symmetric mtypes, MUMPS `symmetric=true`) checks the
 matrix before discarding a triangle and refuses incompatible operators.
 
+The MUMPS extension (MUMPS.jl 1.x) initializes MPI when needed and drives the MUMPS
+job itself, because MUMPS.jl's solve call returns without solving on an instance that
+has solved already: every right-hand side runs a solve, and new values on an
+unchanged sparsity pattern reuse the analysis. Each phase checks INFOG(1), and a
+factorization that runs out of workspace is retried with ICNTL(14) doubled. MUMPS
+memory lives outside Julia's GC, so factors are released explicitly (and before MPI
+is finalized at exit). Output is limited to errors unless `MUMPSSolver(verbose=true)`.
+
 Polarization `:x` projects global x onto the transverse plane and normalizes it;
 `:y` completes the orthonormal basis. Thus x-plane tilt maps :x/:y to p/s, and
 y-plane tilt maps them to s/p. Two-axis tilts have the documented Cartesian
@@ -54,9 +62,11 @@ always tags the CAD curves and points on the mirror walls (`genmesh(...;
 mirror_curves=true)`), so a PEC wall constrains every tangential degree of
 freedom on it for either kind of mesh. Existing `genmesh` calls retain their
 original tetrahedral behavior. Each generated mesh gets a recipe file
-(`meshfile * ".recipe"`) with its genmesh inputs; `reuse_mesh=true` refuses a
-mesh whose recipe differs from the one this call would write, and checks the
-extents and periodic links of an older mesh without a recipe.
+(`meshfile * ".recipe"`) with its genmesh inputs and the SHA-256 of the mesh file;
+`reuse_mesh=true` refuses a mesh whose recipe differs from the one this call would
+write or whose file no longer has the recorded digest, and checks the extents,
+periodic links and mirror-wall tags the mesh itself shows. An older mesh without a
+recipe gets the extents and periodic-link checks, with warnings.
 
 ## Collection sampling and solve counts
 
@@ -106,9 +116,11 @@ not establish that error for patterned structures. Bloch field configurations
 therefore check the lattice when their parameters are built
 (`check_diffraction_orders`): an order (m,n) ≠ (0,0) that propagates in the
 incidence medium, or in a lossless or low-loss substrate, is an error that
-names the order and the largest periods keeping every order evanescent. A
-warning is issued when the slowest evanescent order still has amplitude above
-1e-2 at the top or bottom face.
+names the order and the periods below which every order is evanescent. An order
+at or near cutoff (|q| ≤ 10⁻³ k|n|, a decay length above about 160 wavelengths)
+counts as propagating. A PEC bottom has no admittance term, so substrate orders
+are not checked there. A warning is issued when the slowest evanescent order
+still has amplitude above 1e-2 at a checked face.
 
 ## Validation
 
@@ -129,13 +141,15 @@ that assumes a complex symmetric operator. `test/oblique_solver_guard_tests.jl`
 checks matrix symmetry and refusal of incompatible Pardiso storage modes.
 `test/oblique_symmetry_tests.jl` checks transpose, signed angles, and half/full
 cells. `test/backend_adjoint_tests.jl` checks forward and Aᴴ residuals of every
-solver backend that loads on non-symmetric complex matrices.
+solver backend that loads on non-symmetric complex matrices, in forward, adjoint,
+forward sequences before and after a refactorization; `test/mumps_gradient_tests.jl`
+(slow, skipped without MUMPS.jl) compares MUMPS objectives and gradients with UMFPACK.
 `test/oblique_order_guard_tests.jl` covers the diffraction-order guard,
 `test/oblique_mesh_reuse_tests.jl` the mesh recipe, and
 `test/oblique_normal_equivalence_tests.jl` shows that corrected normal incidence in
 air differs from legacy θ = 0 only by the normal-trace boundary term. The film
 reference also covers a lossy metal substrate. `test/runtests.jl` runs these files;
-`DEO_SLOW_TESTS=1` adds the gradient and symmetry suites. `test/mixed_output_gradient_tests.jl` covers the corrected shared-model
+`DEO_SLOW_TESTS=1` adds the gradient, symmetry and MUMPS suites. `test/mixed_output_gradient_tests.jl` covers the corrected shared-model
 vector/material mapping. `scripts/benchmark_angular_solves.jl` compares local
 sequential/concurrent factorization; no distributed scheduling layer is added.
 
