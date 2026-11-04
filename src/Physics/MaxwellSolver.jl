@@ -30,6 +30,11 @@ function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0
         throw(ArgumentError("FieldConfig: n_incident must equal the lossless fluid index"))
     end
 
+    if fc.formulation == :bloch
+        check_diffraction_orders(lattice_periods(sim), fc, ns;
+            buffers=(sim.bounds[6] - des_high, des_low - sim.bounds[5]))
+    end
+
     pml = nothing
     if !isnothing(env.pml)
         z_bot, d_bot, z_top, d_top = getpmlz(sim.labels, sim.Ω)
@@ -38,6 +43,83 @@ function build_phys_params(fc::FieldConfig, env::Environment, sim; α::Float64=0
 
     PhysicalParams(ω, fc.θ, nf, nm, ns, 1.0, des_low, des_high, α, env.bot_PEC, pml,
         fc.tilt_x, fc.n_incident, fc.polarization, fc.formulation)
+end
+
+# ---------------------------------------------------------------------------
+# Diffraction orders (Bloch formulation)
+# ---------------------------------------------------------------------------
+
+"""
+    check_diffraction_orders(periods, fc, ns; buffers=nothing)
+
+The Bloch boundary terms are the specular-order admittance, exact for the specular wave
+only. Every nonspecular order (m, n) ≠ (0, 0) of the lattice, with in-plane wavevector
+κ + 2π (m/Px, n/Py), must be evanescent in the incidence medium (index `fc.n_incident`) and
+in the substrate (index `ns`); otherwise it reaches a boundary as a wave the admittance does
+not absorb, and this throws, naming the orders and the largest lattice periods (same aspect
+ratio) that keep every order evanescent. A substrate order counts as propagating when its
+normal wavenumber oscillates faster than it decays (|Re q| > |Im q|): lossless and low-loss
+substrates carry orders, a metal absorbs them.
+
+`buffers = (d_top, d_bottom)` are the distances from the design region to the top and bottom
+faces; a warning is issued when the slowest-decaying evanescent order still has amplitude
+above 1e-2 at either face.
+"""
+function check_diffraction_orders(periods, fc::FieldConfig, ns::Number; buffers=nothing)
+    k = 2π / fc.λ
+    κ = inplane_wavevector(fc)
+    κx, κy = real(κ[1]), real(κ[2])
+    Gx, Gy = 2π / periods[1], 2π / periods[2]
+    media = (("incidence medium", complex(fc.n_incident)), ("substrate", complex(ns)))
+    kmax = k * maximum(abs(last(m)) for m in media) + hypot(κx, κy)
+    M, N = ceil(Int, kmax / Gx) + 1, ceil(Int, kmax / Gy) + 1
+    propagating = Tuple{Int,Int,String}[]
+    slowest = [Inf, Inf]
+    for m in -M:M, n in -N:N
+        (m, n) == (0, 0) && continue
+        kt2 = (κx + m * Gx)^2 + (κy + n * Gy)^2
+        for (i, (name, nmed)) in enumerate(media)
+            q = outgoing_normal_wavenumber(k, nmed^2, kt2)
+            if abs(real(q)) > abs(imag(q))
+                push!(propagating, (m, n, name))
+            else
+                slowest[i] = min(slowest[i], abs(imag(q)))
+            end
+        end
+    end
+    if !isempty(propagating)
+        sort!(propagating; by=o -> (abs(o[1]) + abs(o[2]), o[3]))
+        indices = [real(fc.n_incident)]
+        abs(imag(ns)) < abs(real(ns)) && push!(indices, real(ns))
+        s = largest_evanescent_scale(periods, (κx, κy), k, indices)
+        orders = join(["($(o[1]), $(o[2])) in the $(o[3])" for o in propagating[1:min(end, 6)]], ", ")
+        r1(x) = round(x; digits=1)
+        throw(ArgumentError("$(repr(fc)): nonspecular diffraction order(s) $orders propagate at lattice periods $(r1(periods[1])) × $(r1(periods[2])) nm; the specular-order boundary does not absorb them. Largest lattice periods that keep every order evanescent (same aspect ratio): $(r1(s * periods[1])) × $(r1(s * periods[2])) nm. In build_angular_simulation, geo.L and geo.W are half the lattice period."))
+    end
+    if buffers !== nothing
+        for (i, (name, _)) in enumerate(media)
+            amp = exp(-slowest[i] * buffers[i])
+            amp > 1e-2 && @warn "$(repr(fc)): the slowest evanescent diffraction order still has amplitude $(round(amp; sigdigits=2)) at the $(i == 1 ? "top" : "bottom") face ($(round(buffers[i]; digits=1)) nm from the design region); the specular-order boundary is not exact for it" maxlog = 1
+        end
+    end
+    return nothing
+end
+
+"Largest scale factor s such that, at periods s·P, every nonzero order is evanescent in every lossless medium of the given indices."
+function largest_evanescent_scale(periods, κ, k, indices)
+    Gx, Gy = 2π / periods[1], 2π / periods[2]
+    s = Inf
+    for nmed in indices, m in -4:4, n in -4:4
+        (m, n) == (0, 0) && continue
+        gx, gy = m * Gx, n * Gy
+        g2 = gx^2 + gy^2
+        kg = κ[1] * gx + κ[2] * gy
+        disc = kg^2 + g2 * ((k * nmed)^2 - (κ[1]^2 + κ[2]^2))
+        disc > 0 || continue
+        t = (-kg + sqrt(disc)) / g2     # the order propagates for 1/s < t
+        t > 0 && (s = min(s, 1 / t))
+    end
+    return s
 end
 
 # ---------------------------------------------------------------------------

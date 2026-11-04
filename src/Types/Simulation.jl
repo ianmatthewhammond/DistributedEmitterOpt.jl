@@ -57,6 +57,7 @@ mutable struct Simulation
     per_x::Bool
     per_y::Bool
     objective_normalization::Float64
+    bounds::NTuple{6,Float64}  # (xmin, xmax, ymin, ymax, zmin, zmax) of the mesh nodes
 
     # Inner constructor for partial initialization
     Simulation() = new()
@@ -203,6 +204,9 @@ function build_simulation(meshfile::String;
     per_y !== nothing && Bool(per_y) != py && throw(ArgumentError("build_simulation: per_y disagrees with mesh periodic links"))
     sim.per_x, sim.per_y = px, py
     sim.objective_normalization = 1.0
+    # Grid nodes, not topology vertices: a periodic mesh merges its slave vertices away.
+    node_coords = Gridap.Geometry.get_node_coordinates(sim.Ω)
+    sim.bounds = Tuple(f(p[i] for p in node_coords) for i in 1:3 for f in (minimum, maximum))
     px && dir_x && throw(ArgumentError("build_simulation: FacesX cannot be both periodic and PEC"))
     py && dir_y && throw(ArgumentError("build_simulation: FacesY cannot be both periodic and PEC"))
 
@@ -231,6 +235,15 @@ function mesh_periodic_axes(meshfile)
     end
     px, py
 end
+
+"""
+    lattice_periods(sim) -> (Px, Py)
+
+In-plane lattice periods of the field cell. A Bloch-periodic axis repeats the cell; a mirror
+axis repeats it reflected, so its period is twice the cell width.
+"""
+lattice_periods(sim::Simulation) = ((sim.per_x ? 1 : 2) * (sim.bounds[2] - sim.bounds[1]),
+                                    (sim.per_y ? 1 : 2) * (sim.bounds[4] - sim.bounds[3]))
 
 function validate_field_boundaries(sim::Simulation, fc::FieldConfig)
     fc.tilt_x != 0 && !sim.per_x && throw(ArgumentError("FieldConfig: tilt_x crosses mirror wall FacesX; a Bloch-periodic x mesh is required"))
