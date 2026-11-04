@@ -44,41 +44,42 @@ function npgradient(ar::AbstractArray)
 end
 
 """
-    indicator_solid(x, c0, filter_f, threshold_f, resolution) -> Matrix
+    gradient_sq(f, resolution; mirror) -> Matrix
+
+|∇f|² at the grid nodes from central differences, in physical units. With `mirror=true`
+(the DCT filter, whose cell has mirror walls on every edge) the neighbour across a wall is
+the reflected inner node, so the normal derivative on a wall is zero. With `mirror=false`
+(the FFT filter, a periodic cell of `size(f)` nodes) it is the node on the opposite edge.
 """
-function indicator_solid(x::AbstractMatrix, c0::Float64, filter_f, threshold_f, resolution::Float64)
-    filtered_field = filter_f(x)
-    design_field = threshold_f(filtered_field)
-
-    filtered_field = repeat(filtered_field, outer=(1, 3))'
-    filtered_field = repeat(filtered_field, outer=(3, 1))'
-
-    gradient_filtered_field = centeredfft(npgradient(filtered_field), (2, size(x)...))
-    grad_mag = (gradient_filtered_field[1, :, :] .* resolution) .^ 2 .+
-               (gradient_filtered_field[2, :, :] .* resolution) .^ 2
-    if length(size(grad_mag)) != 2
-        throw(ErrorException("The gradient fields must be 2 dimensional. Check input array and filter functions."))
-    end
-    return design_field .* exp.(-c0 .* grad_mag)
+function gradient_sq(f::AbstractMatrix, resolution::Float64; mirror::Bool)
+    fx = mirror ? vcat(f[2:2, :], f, f[end-1:end-1, :]) : vcat(f[end:end, :], f, f[1:1, :])
+    fy = mirror ? hcat(f[:, 2:2], f, f[:, end-1:end-1]) : hcat(f[:, end:end], f, f[:, 1:1])
+    gx = (fx[3:end, :] .- fx[1:end-2, :]) .* (resolution / 2)
+    gy = (fy[:, 3:end] .- fy[:, 1:end-2]) .* (resolution / 2)
+    return gx .^ 2 .+ gy .^ 2
 end
 
 """
-    indicator_void(x, c0, filter_f, threshold_f, resolution) -> Matrix
+    indicator_solid(x, c0, filter_f, threshold_f, resolution; mirror=true) -> Matrix
+
+Solid indicator: the projected field where the filtered field is flat. `mirror` matches the
+filter's boundary (see `gradient_sq`).
 """
-function indicator_void(x::AbstractMatrix, c0::Float64, filter_f, threshold_f, resolution::Float64)
+function indicator_solid(x::AbstractMatrix, c0::Float64, filter_f, threshold_f, resolution::Float64;
+    mirror::Bool=true)
     filtered_field = filter_f(x)
     design_field = threshold_f(filtered_field)
+    return design_field .* exp.(-c0 .* gradient_sq(filtered_field, resolution; mirror))
+end
 
-    filtered_field = repeat(filtered_field, outer=(1, 3))'
-    filtered_field = repeat(filtered_field, outer=(3, 1))'
-
-    gradient_filtered_field = centeredfft(npgradient(filtered_field), (2, size(x)...))
-    grad_mag = (gradient_filtered_field[1, :, :] .* resolution) .^ 2 .+
-               (gradient_filtered_field[2, :, :] .* resolution) .^ 2
-    if length(size(grad_mag)) != 2
-        throw(ErrorException("The gradient fields must be 2 dimensional. Check input array and filter functions."))
-    end
-    return (1 .- design_field) .* exp.(-c0 .* grad_mag)
+"""
+    indicator_void(x, c0, filter_f, threshold_f, resolution; mirror=true) -> Matrix
+"""
+function indicator_void(x::AbstractMatrix, c0::Float64, filter_f, threshold_f, resolution::Float64;
+    mirror::Bool=true)
+    filtered_field = filter_f(x)
+    design_field = threshold_f(filtered_field)
+    return (1 .- design_field) .* exp.(-c0 .* gradient_sq(filtered_field, resolution; mirror))
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -86,24 +87,24 @@ end
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    control_solid(p; c0, ηe, filter_f, threshold_f, resolution) -> Real
+    control_solid(p; c0, ηe, filter_f, threshold_f, resolution, mirror=true) -> Real
 """
 function control_solid(p::AbstractMatrix; c0::Float64, ηe::Float64,
-    filter_f, threshold_f, resolution::Float64)
+    filter_f, threshold_f, resolution::Float64, mirror::Bool=true)
     filtered_field = filter_f(p)
-    I_s = flatten(indicator_solid(p, c0, filter_f, threshold_f, resolution))
+    I_s = flatten(indicator_solid(p, c0, filter_f, threshold_f, resolution; mirror))
     flt = flatten(filtered_field)
     minfield = min.(flt .- ηe, 0.0) .^ 2
     return sum(I_s .* minfield) / length(flt)
 end
 
 """
-    control_void(p; c0, ηd, filter_f, threshold_f, resolution) -> Real
+    control_void(p; c0, ηd, filter_f, threshold_f, resolution, mirror=true) -> Real
 """
 function control_void(p::AbstractMatrix; c0::Float64, ηd::Float64,
-    filter_f, threshold_f, resolution::Float64)
+    filter_f, threshold_f, resolution::Float64, mirror::Bool=true)
     filtered_field = filter_f(p)
-    I_v = flatten(indicator_void(p, c0, filter_f, threshold_f, resolution))
+    I_v = flatten(indicator_void(p, c0, filter_f, threshold_f, resolution; mirror))
     flt = flatten(filtered_field)
     minfield = min.(ηd .- flt, 0.0) .^ 2
     return sum(I_v .* minfield) / length(flt)
@@ -141,7 +142,7 @@ function glc_solid(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     p = reshape(x, (nx, ny))
 
     # Objective
-    M1 = p -> control_solid(p; c0, ηe, filter_f, threshold_f, resolution)
+    M1 = p -> control_solid(p; c0, ηe, filter_f, threshold_f, resolution, mirror=control.use_dct)
 
     # Gradient via Zygote
     if length(grad) > 0
@@ -178,7 +179,7 @@ function glc_void(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     p = reshape(x, (nx, ny))
 
     # Objective
-    M2 = p -> control_void(p; c0, ηd, filter_f, threshold_f, resolution)
+    M2 = p -> control_void(p; c0, ηd, filter_f, threshold_f, resolution, mirror=control.use_dct)
 
     # Gradient via Zygote
     if length(grad) > 0

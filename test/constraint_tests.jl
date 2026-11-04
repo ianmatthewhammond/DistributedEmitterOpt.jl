@@ -85,8 +85,35 @@ function build_constraint_problem(; foundry_mode::Bool)
     return prob
 end
 
+"""Full period of a mirror-walled quarter cell: reflected across both walls, wall nodes once."""
+function mirror_period(f)
+    n, m = size(f)
+    half = vcat(reverse(f[2:n-1, :]; dims=1), f)
+    return hcat(reverse(half[:, 2:m-1]; dims=2), half)
+end
+
 @testset "Constraints Tests" begin
     Random.seed!(42)
+
+    @testset "2D indicator at cell walls" begin
+        ind = DistributedEmitterOpt.indicator_solid
+        res, c0 = 0.8, 64 * 3.0^2
+        # A smooth field with large gradients normal to every wall.
+        n, m = 31, 23
+        f = [0.5 + 0.4 * sin(0.3i + 0.1) * cos(0.25j - 0.2) for i in 1:n, j in 1:m]
+
+        # Mirror walls: the quarter cell's indicator is the mirrored period's (periodic) one.
+        quarter = ind(f, c0, identity, identity, res; mirror=true)
+        period = ind(mirror_period(f), c0, identity, identity, res; mirror=false)
+        @test quarter ≈ period[n-1:end, m-1:end] atol = 1e-14
+
+        # Periodic cell: translating the field translates the indicator, along x and y.
+        g = rand(n, m)
+        base = ind(g, c0, identity, identity, res; mirror=false)
+        for s in ((5, 0), (0, 7), (3, 11))
+            @test ind(circshift(g, s), c0, identity, identity, res; mirror=false) ≈ circshift(base, s) atol = 1e-14
+        end
+    end
 
     @testset "2D Foundry Constraints" begin
         prob = build_constraint_problem(foundry_mode=true)
