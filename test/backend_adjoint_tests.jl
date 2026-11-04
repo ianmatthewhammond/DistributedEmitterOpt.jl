@@ -83,6 +83,18 @@ end
             @test solve_sequence(s2, f, 2M, rng) < 1e-11
             DEO.release_factor!(s2, f)
         end
+        # The MPI backend, the only one before MUMPS.jl 1.6.1, next to the sequential default
+        if ext.HAS_SEQUENTIAL
+            f = DEO.lu!(s, B)
+            @test f.sequential
+            DEO.release_factor!(s, f)
+            f = ext.new_factor(s, B, 0; sequential=false)
+            @test !f.sequential
+            @test solve_sequence(s, f, B, rng) < 1e-11
+            @test DEO.lu!(s, f, 2B) === f
+            @test solve_sequence(s, f, 2B, rng) < 1e-11
+            DEO.release_factor!(s, f)
+        end
         # Real unsymmetric storage (sym = 0), as DEO never asks for it: the transposed solve
         f = ext.new_factor(s, R, 0)
         @test solve_sequence(s, f, R, rng) < 1e-11
