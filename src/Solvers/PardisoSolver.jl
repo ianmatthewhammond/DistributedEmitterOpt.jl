@@ -5,7 +5,7 @@ Optional sparse direct solver using Intel MKL Pardiso through Pardiso.jl.
 Requires the user to independently install Pardiso.jl.
 
 The actual implementation is in ext/PardisoExt.jl and loads with Pardiso.jl alone
-(`using Pardiso`). MKL Pardiso needs MKL, which is not available everywhere (not on
+(`import Pardiso`). MKL Pardiso needs MKL, which is not available everywhere (not on
 Apple Silicon, for example); `UmfpackSolver()` runs on every platform.
 """
 
@@ -99,7 +99,7 @@ function checked_pardiso_iparm(iparm::AbstractVector{<:Integer})
 end
 
 # Stub implementations that error if extension not loaded
-const PARDISO_NOT_LOADED = "Pardiso extension not loaded. Install Pardiso.jl (using Pkg; Pkg.add(\"Pardiso\")) and load it with `using Pardiso`; MKL Pardiso needs MKL, so use UmfpackSolver() where MKL is not available"
+const PARDISO_NOT_LOADED = "Pardiso extension not loaded. Install Pardiso.jl (using Pkg; Pkg.add(\"Pardiso\")) and load it with `import Pardiso`; MKL Pardiso needs MKL, so use UmfpackSolver() where MKL is not available"
 
 function lu!(::PardisoSolver, A::SparseMatrixCSC)
     error(PARDISO_NOT_LOADED)

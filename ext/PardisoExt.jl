@@ -16,9 +16,11 @@ types keep one triangle (Maxwell mtype 6 with `assume_symmetric_maxwell=true`, f
 -2 and 2) and are used only for a matrix checked to be symmetric.
 
 The analysis is reused while the sparsity pattern matches a copy taken when it ran. A factor
-is released once, by `release_factor!` or when its factorization fails; a factor that is
-dropped is released by the finalizer `Pardiso.pardisoinit` registers. A lock per factor
-guards its handle, whose iparm(12) changes between solves.
+is released once, by `release_factor!` or when its factorization fails. A dropped factor is
+released by the finalizer that `Pardiso.pardisoinit` registers (Pardiso.jl 1.1 and later);
+MKL empties a handle when it releases it, so that finalizer's repeat release of a released
+factor does nothing. A lock per factor guards its handle, whose iparm(12) changes between
+solves.
 """
 module PardisoExt
 
