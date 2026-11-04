@@ -1,9 +1,9 @@
 """
     MUMPSExt
 
-MUMPS through MUMPS.jl 1.x, behind `DistributedEmitterOpt.MUMPSSolver`. With MUMPS.jl 1.6.1
-and later it runs the sequential MUMPS build (`MUMPS.Sequential()`), which needs no MPI;
-older versions run MUMPS on one MPI rank, and the extension initializes MPI for them.
+MUMPS through MUMPS.jl 1.x, behind `DistributedEmitterOpt.MUMPSSolver`. When MUMPS.jl has a
+`MUMPS.Sequential()` backend (1.7.1 does) the extension runs that sequential MUMPS build, which
+needs no MPI; otherwise (1.6.1, for example) it runs MUMPS on one MPI rank and initializes MPI.
 
 MUMPS.jl keeps a job state on each instance: its solve call returns without solving on an
 instance that has solved already, and its factorize call does nothing on a factored one.
@@ -42,7 +42,7 @@ using SparseArrays: SparseMatrixCSC
 mutable struct MUMPSFactor{T}
     mumps::Mumps
     sym::Int
-    sequential::Bool            # the MPI-free MUMPS build (MUMPS.jl 1.6.1 and later)
+    sequential::Bool            # the MPI-free MUMPS build (MUMPS.Sequential(), MUMPS.jl 1.7.1)
     n::Int                      # size and pattern of the last analysis (copies)
     colptr::Vector{Int}
     rowval::Vector{Int}
