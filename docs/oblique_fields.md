@@ -8,9 +8,8 @@ match the environment. The time convention is exp(+iωt), material index n−ik,
 and physical E=envelope exp(−i k_parallel·r). The trial curl has the negative
 Bloch shift and the bilinear test curl has the positive shift. Oblique matrices
 are generally not complex symmetric (A(κ)ᵀ = A(−κ)), so adjoint solves must be true
-Aᴴ solves. UMFPACK does this, and MUMPS solves Aᵀ conj(x) = conj(b). The Pardiso
-extension's adjoint is the legacy conj(A⁻¹ conj b), valid only for Aᵀ = A, so it
-refuses the factor of a non-symmetric matrix; use UMFPACK for oblique problems.
+Aᴴ solves. UMFPACK does this, and MUMPS and Pardiso solve Aᵀ conj(x) = conj(b) on
+the same factorization (see [Solver backends](#solver-backends)).
 Symmetric storage (Pardiso symmetric mtypes, MUMPS `symmetric=true`) checks the
 matrix before discarding a triangle and refuses incompatible operators.
 
@@ -163,3 +162,48 @@ and [oblique Fresnel validation](https://doc.comsol.com/6.3/doc/com.comsol.help.
 The eigenmode problem is not extended here. Nonzero eigenmode angles now refuse
 explicitly; the old generalized eigenproblem cannot represent this corrected
 angle-dependent frequency-domain operator by silently reusing its old shift.
+
+## Solver backends
+
+`UmfpackSolver()` runs everywhere and is the default. `MUMPSSolver()` needs MUMPS.jl
+(and MPI), and `PardisoSolver()` needs Pardiso.jl and MKL. Each solves A x = b and
+the adjoint Aᴴ x = b on one factorization, so all three are valid for oblique
+fields.
+
+`PardisoSolver` drives MKL Pardiso through Pardiso.jl; `import Pardiso` loads the
+extension. Pardiso.jl exports its own `PardisoSolver`, so after `using Pardiso`
+write `DistributedEmitterOpt.PardisoSolver`. MKL is not available on every platform
+(not on Apple Silicon, for example); there the first factorization reports it, and
+`UmfpackSolver()` is the fallback. Pardiso.jl uses MKL_jll by default. A Pardiso.jl
+built against a local MKL (`MKLROOT` set at build time) needs `MKLROOT` and MKL's
+library directory on `LD_LIBRARY_PATH` at run time, and `MKL_THREADING_LAYER=GNU`
+when other libraries in the process use GNU OpenMP. `nprocs > 0` sets MKL Pardiso's
+thread count, a process-wide MKL setting; the default 0 keeps MKL's own
+(`MKL_NUM_THREADS`, or all cores).
+
+Pardiso reads Julia's CSC arrays as CSR, that is, it sees Aᵀ. The Maxwell type is
+chosen for each factorization, on the full matrix. A matrix verified complex
+symmetric (‖A − Aᵀ‖_F ≤ 10⁻¹² ‖A‖_F, which holds at normal incidence, also for the
+normal emission of a tilted pump) gets mtype 6, which keeps one triangle. Any other,
+such as an oblique Bloch operator, gets mtype 13 in full storage. With mtype 13 the
+forward solve is Pardiso's transposed solve and the adjoint is its plain solve on
+conj(b), conjugated; with mtype 6 both are plain solves, and the conjugated one is
+the exact adjoint. `assume_symmetric_maxwell` keeps its meaning when it is given:
+`true` forces mtype 6 (refused for a matrix that is not complex symmetric) and
+`false` forces mtype 13. Its default is now `nothing`, the per-factorization choice;
+it used to be `false`. The Helmholtz filter uses mtype -2 by default; 2 and 11 are
+also accepted, and the symmetric types check the matrix first. The analysis is
+reused while the sparsity pattern matches the one it ran on, so a design update
+costs one numerical factorization. The legacy iparm profile applies to
+full-storage Maxwell factorizations, and mtype 6 keeps MKL's defaults; a custom
+`iparm` must keep iparm(1) = 1, iparm(6) = 0, iparm(28) = 0 and iparm(35) = 0,
+and iparm(12) is set by the backend for each solve.
+
+The previous extension went through GridapPardiso. Its `solve!` performs the forward
+solve only (iparm(12) is fixed with the solver and flipped for the CSC layout), so
+the adjoint was formed as conj(A⁻¹ conj b), which equals Aᴴ⁻¹ b only for Aᵀ = A and
+is wrong for oblique Bloch operators. The extension now needs Pardiso.jl alone.
+`test/backend_adjoint_tests.jl` checks forward and adjoint residuals of every
+backend that loads, and `test/pardiso_oblique_gradient_tests.jl` (run with
+`DEO_SLOW_TESTS=1`, skipped without Pardiso.jl and MKL) checks oblique gradients and
+agreement with UMFPACK.

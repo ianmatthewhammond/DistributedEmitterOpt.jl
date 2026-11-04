@@ -1,149 +1,151 @@
 """
     PardisoExt
 
-Package extension that provides the Pardiso solver implementation via GridapPardiso
-symbolic/numerical setup, matching the legacy Emitter3DTopOpt workflow.
+Intel MKL Pardiso through Pardiso.jl, behind `DistributedEmitterOpt.PardisoSolver`. The
+extension loads with Pardiso.jl alone and runs where MKL does (x86-64 Linux, for example);
+where MKL is not available, such as on Apple Silicon, use `UmfpackSolver()`.
 
-This extension loads only when both Pardiso.jl and GridapPardiso.jl are available.
+Pardiso reads Julia's CSC arrays as CSR, so it sees Aᵀ. A matrix stored in full (Maxwell
+mtype 13 and filter mtype 11) is solved on one factorization as
+
+    A x = b   →  transposed solve of what Pardiso sees                 (iparm(12) = 2)
+    Aᴴ x = b  ⇔  Aᵀ conj(x) = conj(b)  →  plain solve (iparm(12) = 0) on conj(b), conjugated
+
+so oblique Bloch operators, which are not complex symmetric, get true adjoints. Symmetric
+types keep one triangle and are used only for a matrix checked to be symmetric: Maxwell
+mtype 6, which `checked_maxwell_mtype` picks by default for each factorization whose
+matrix is complex symmetric (normal incidence), and filter mtypes -2 and 2. For them the
+same plain solve on conj(b) is the exact adjoint.
+
+The analysis is reused while the sparsity pattern matches a copy taken when it ran. A factor
+is released once, by `release_factor!` or when its factorization fails. A dropped factor is
+released by the finalizer that `Pardiso.pardisoinit` registers (Pardiso.jl 1.1 and later);
+MKL empties a handle when it releases it, so that finalizer's repeat release of a released
+factor does nothing. A lock per factor guards its handle, whose iparm(12) changes between
+solves.
 """
 module PardisoExt
 
 import DistributedEmitterOpt
 import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!, release_factor!
-import GridapPardiso
-using SparseArrays: SparseMatrixCSC, spzeros, tril
+import Pardiso
+using SparseArrays: SparseMatrixCSC, tril
 
 # ---------------------------------------------------------------------------
 # Factor wrapper
 # ---------------------------------------------------------------------------
 
 mutable struct PardisoFactor{T}
-    symbolic::Any
-    numerical::Any
-    psolver::Any
-    A::SparseMatrixCSC{T,Int}
+    ps::Pardiso.MKLPardisoSolver
+    A::SparseMatrixCSC{T,Int}   # as handed to Pardiso: the lower triangle for symmetric types
     mtype::Int
-    pattern_hash::UInt
+    n::Int                      # size and pattern of the last analysis (copies)
+    colptr::Vector{Int}
+    rowval::Vector{Int}
     released::Bool
-    symmetric::Bool   # full matrix was (complex) symmetric: the conj-solve adjoint is valid
+    lock::ReentrantLock
 end
 
-is_symmetric_mtype(mtype::Int) = mtype in (1, 2, -2, 3, 4, -4, 6)
+one_triangle(mtype::Int) = mtype in (2, -2, 6)
+storage(A, mtype::Int) = one_triangle(mtype) ? tril(A) : A
+same_pattern(f::PardisoFactor, A) =
+    size(A) == (f.n, f.n) && A.colptr == f.colptr && A.rowval == f.rowval
 
-function matrix_for_mtype(A::SparseMatrixCSC{T,Int}, mtype::Int) where T
-    is_symmetric_mtype(mtype) ? tril(A) : A
+# iparm(12) for A x = b, kept between calls. A symmetric type solves what it stores.
+forward_mode(mtype::Int) = one_triangle(mtype) ? 0 : 2
+
+function maxwell_mtype(solver::DistributedEmitterOpt.PardisoSolver, A)
+    mtype = DistributedEmitterOpt.checked_maxwell_mtype(solver, A)
+    mtype in (13, 6) ||
+        throw(ArgumentError("PardisoSolver: Maxwell mtype=$mtype is not supported; use 13 and 6 (the defaults of mtype and mtype_symmetric)"))
+    return mtype
 end
 
-function sparsity_hash(A::SparseMatrixCSC{T,Int}, mtype::Int) where T
-    h = hash(mtype, hash(size(A)))
-    h = hash(A.colptr, h)
-    hash(A.rowval, h)
-end
-
-function log_pardiso_mem(tag::AbstractString)
-    free_mb = Sys.free_memory() / 2^20
-    total_mb = Sys.total_memory() / 2^20
-    DistributedEmitterOpt.log_debug(
-        :solver,
-        "Pardiso memory snapshot";
-        tag,
-        free_mem_mb=round(free_mb, digits=2),
-        total_mem_mb=round(total_mb, digits=2),
-    )
-end
-
-function release_pardiso!(factor::PardisoFactor)
-    factor.released && return nothing
-    log_pardiso_mem("release:start")
-
-    if !isnothing(factor.symbolic)
-        try
-            # Run GridapPardiso's own finalizer exactly once.
-            finalize(factor.symbolic)
-        catch
-            # Best-effort cleanup. Keep idempotent behavior if finalization fails.
-        end
-    end
-
-    factor.symbolic = nothing
-    factor.numerical = nothing
-    factor.psolver = nothing
-    factor.A = spzeros(eltype(factor.A), 0, 0)
-    factor.released = true
-    log_pardiso_mem("release:done")
+function release_pardiso!(f::PardisoFactor)
+    f.released && return nothing
+    f.released = true
+    Pardiso.set_phase!(f.ps, Pardiso.RELEASE_ALL)
+    Pardiso.pardiso(f.ps)
     return nothing
 end
 
-function gridap_solver(solver::DistributedEmitterOpt.PardisoSolver, mtype::Int; use_iparm::Bool)
-    msglvl = solver.msglvl == 0 ? GridapPardiso.MSGLVL_QUIET : solver.msglvl
+# Analysis and/or numerical factorization. A failure releases the handle before rethrowing.
+function factorize!(f::PardisoFactor{T}, phase::Pardiso.Phase) where T
+    try
+        Pardiso.set_phase!(f.ps, phase)
+        Pardiso.pardiso(f.ps, f.A, zeros(T, f.n))
+    catch
+        try
+            release_pardiso!(f)
+        catch
+        end
+        rethrow()
+    end
+    return f
+end
+
+function new_factor(solver::DistributedEmitterOpt.PardisoSolver, Awork::SparseMatrixCSC{T,Int},
+                    mtype::Int; use_iparm::Bool) where T
+    Pardiso.mkl_is_available() ||
+        error("PardisoSolver: MKL is not available here (MKL Pardiso needs MKL, for example on x86-64 Linux); use UmfpackSolver()")
+    ps = Pardiso.MKLPardisoSolver()
+    solver.nprocs > 0 && Pardiso.set_nprocs!(ps, solver.nprocs)
+    Pardiso.set_matrixtype!(ps, mtype)
+    Pardiso.pardisoinit(ps)
     if use_iparm && !isnothing(solver.iparm)
-        return GridapPardiso.PardisoSolver(mtype=mtype, iparm=solver.iparm, msglvl=msglvl)
-    else
-        return GridapPardiso.PardisoSolver(mtype=mtype, msglvl=msglvl)
+        for (i, v) in enumerate(DistributedEmitterOpt.checked_pardiso_iparm(solver.iparm))
+            Pardiso.set_iparm!(ps, i, v)
+        end
     end
+    Pardiso.set_iparm!(ps, 12, forward_mode(mtype))
+    solver.msglvl > 0 && Pardiso.set_msglvl!(ps, Pardiso.MESSAGE_LEVEL_ON)
+    f = PardisoFactor{T}(ps, Awork, mtype, size(Awork, 1), copy(Awork.colptr), copy(Awork.rowval),
+        false, ReentrantLock())
+    return factorize!(f, Pardiso.ANALYSIS_NUM_FACT)
 end
 
-function new_pardiso_factor(
-    solver::DistributedEmitterOpt.PardisoSolver,
-    A::SparseMatrixCSC{T,Int},
-    mtype::Int;
-    use_iparm::Bool,
-) where T
-    log_pardiso_mem("new_factor:start")
-    # Decided on the full matrix, before a symmetric mtype keeps only one triangle.
-    symmetric = DistributedEmitterOpt.pardiso_shortcut_adjoint_ok(A)
-    Awork = matrix_for_mtype(A, mtype)
-    psolver = gridap_solver(solver, mtype; use_iparm)
-    symbolic = GridapPardiso.symbolic_setup(psolver, Awork)
-    numerical = GridapPardiso.numerical_setup(symbolic, Awork)
-
-    factor = PardisoFactor{T}(symbolic, numerical, psolver, Awork, mtype, sparsity_hash(Awork, mtype), false, symmetric)
-    finalizer(release_pardiso!, factor)
-    log_pardiso_mem("new_factor:done")
-    return factor
+# New values on the analysed pattern need a numerical factorization only. Otherwise the old
+# handle is released and a new factor is built.
+function refactor(solver::DistributedEmitterOpt.PardisoSolver, f::PardisoFactor{T},
+                  A::SparseMatrixCSC{T,Int}, mtype::Int; use_iparm::Bool) where T
+    Awork = storage(A, mtype)
+    reused = lock(f.lock) do
+        if solver.reuse_symbolic && !f.released && f.mtype == mtype && same_pattern(f, Awork)
+            f.A = Awork
+            factorize!(f, Pardiso.NUM_FACT)
+        else
+            release_pardiso!(f)
+            nothing
+        end
+    end
+    return reused === nothing ? new_factor(solver, Awork, mtype; use_iparm) : reused
 end
 
-function refactor_pardiso!(
-    solver::DistributedEmitterOpt.PardisoSolver,
-    factor::PardisoFactor{T},
-    A::SparseMatrixCSC{T,Int},
-    mtype::Int;
-    use_iparm::Bool,
-) where T
-    log_pardiso_mem("refactor:start")
-    Awork = matrix_for_mtype(A, mtype)
-    new_hash = sparsity_hash(Awork, mtype)
-
-    can_reuse_symbolic = solver.reuse_symbolic &&
-                         !factor.released &&
-                         factor.mtype == mtype &&
-                         factor.pattern_hash == new_hash &&
-                         !isnothing(factor.symbolic)
-
-    if can_reuse_symbolic
-        factor.numerical = GridapPardiso.numerical_setup(factor.symbolic, Awork)
-        factor.symmetric = DistributedEmitterOpt.pardiso_shortcut_adjoint_ok(A)
-        factor.A = Awork
-        factor.pattern_hash = new_hash
-        factor.released = false
-        log_pardiso_mem("refactor:reuse_symbolic")
-        return factor
+# Solve with iparm(12) = mode, then restore the forward setting.
+function pardiso_solve(f::PardisoFactor{T}, b::Vector{T}, mode::Int) where T
+    lock(f.lock) do
+        f.released && throw(ArgumentError("PardisoSolver: this factorization has been released"))
+        x = similar(b)
+        Pardiso.set_iparm!(f.ps, 12, mode)
+        try
+            Pardiso.set_phase!(f.ps, Pardiso.SOLVE_ITERATIVE_REFINE)
+            Pardiso.pardiso(f.ps, x, f.A, b)
+        finally
+            Pardiso.set_iparm!(f.ps, 12, forward_mode(f.mtype))
+        end
+        return x
     end
-
-    release_pardiso!(factor)
-    log_pardiso_mem("refactor:rebuild_symbolic")
-    return new_pardiso_factor(solver, A, mtype; use_iparm)
 end
 
 # ---------------------------------------------------------------------------
 # Interface implementation
 # ---------------------------------------------------------------------------
 
+# As before, the iparm profile applies to unsymmetric (full-storage) Maxwell factorizations;
+# a symmetric type keeps MKL's defaults.
 function lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{ComplexF64,Int})
-    mtype = DistributedEmitterOpt.checked_maxwell_mtype(solver, A)
-    # Match legacy behavior: custom iparm profile was used for unsymmetric Maxwell only.
-    use_iparm = !solver.assume_symmetric_maxwell
-    return new_pardiso_factor(solver, A, mtype; use_iparm)
+    mtype = maxwell_mtype(solver, A)
+    return new_factor(solver, storage(A, mtype), mtype; use_iparm=!one_triangle(mtype))
 end
 
 function lu!(
@@ -151,13 +153,13 @@ function lu!(
     factor::PardisoFactor{ComplexF64},
     A::SparseMatrixCSC{ComplexF64,Int},
 )
-    mtype = DistributedEmitterOpt.checked_maxwell_mtype(solver, A)
-    use_iparm = !solver.assume_symmetric_maxwell
-    return refactor_pardiso!(solver, factor, A, mtype; use_iparm)
+    mtype = maxwell_mtype(solver, A)
+    return refactor(solver, factor, A, mtype; use_iparm=!one_triangle(mtype))
 end
 
 function filter_lu!(solver::DistributedEmitterOpt.PardisoSolver, A::SparseMatrixCSC{Float64,Int})
-    return new_pardiso_factor(solver, A, solver.filter_mtype; use_iparm=false)
+    mtype = DistributedEmitterOpt.checked_filter_mtype(solver, A)
+    return new_factor(solver, storage(A, mtype), mtype; use_iparm=false)
 end
 
 function filter_lu!(
@@ -165,26 +167,21 @@ function filter_lu!(
     factor::PardisoFactor{Float64},
     A::SparseMatrixCSC{Float64,Int},
 )
-    return refactor_pardiso!(solver, factor, A, solver.filter_mtype; use_iparm=false)
+    return refactor(solver, factor, A, DistributedEmitterOpt.checked_filter_mtype(solver, A); use_iparm=false)
 end
 
 function solve!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
-    x = similar(b)
-    GridapPardiso.solve!(x, factor.numerical, b)
-    return x
+    return pardiso_solve(factor, b, forward_mode(factor.mtype))
 end
 
+# Aᴴ x = b ⇔ Aᵀ conj(x) = conj(b), the plain solve of the Aᵀ that Pardiso sees.
 function solve_adjoint!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor{T}, b::Vector{T}) where T
-    # Match legacy solveconj path: x = conj(solve(A, conj(b))). This is Aᴴ⁻¹ b only for Aᵀ = A,
-    # so a factor of a non-symmetric (oblique) matrix is refused rather than solved wrongly.
-    DistributedEmitterOpt.check_pardiso_adjoint(factor.symmetric)
-    x = similar(b)
-    GridapPardiso.solve!(x, factor.numerical, conj.(b))
-    return conj.(x)
+    T <: Complex || return pardiso_solve(factor, b, 0)
+    return conj!(pardiso_solve(factor, conj(b), 0))
 end
 
 function release_factor!(::DistributedEmitterOpt.PardisoSolver, factor::PardisoFactor)
-    release_pardiso!(factor)
+    lock(() -> release_pardiso!(factor), factor.lock)
 end
 
 end # module

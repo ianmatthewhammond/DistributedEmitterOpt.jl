@@ -51,8 +51,11 @@ Hyperparameters for filtering, projection, SSP, and linewidth constraints.
 SolverCache(solver)
 SolverCachePool(solver)
 UmfpackSolver()
+MUMPSSolver(; symmetric=false, verbose=false)   # needs MUMPS.jl
+PardisoSolver(; kwargs...)                      # needs Pardiso.jl and MKL
 ```
-Linear solver caching for LU reuse across field configurations.
+Linear solver caching for LU reuse across field configurations. The backends and their
+adjoint solves are described in [oblique_fields.md](oblique_fields.md#solver-backends).
 
 ```julia
 Simulation()

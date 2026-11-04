@@ -32,7 +32,8 @@ using Test
 
     # Oblique incidence (docs/oblique_fields.md). DEO_SLOW_TESTS=1 adds the longest files: the
     # general-angle gradient ladders, the reflection/cell-reduction symmetry suite, and the
-    # MUMPSSolver gradients (skipped without MUMPS.jl).
+    # MUMPSSolver and PardisoSolver gradients (skipped without MUMPS.jl, and without Pardiso.jl
+    # and MKL).
     @testset "Oblique incidence" begin
         for file in ("oblique_fresnel_tests.jl", "oblique_film_reference_tests.jl",
                      "oblique_normal_equivalence_tests.jl", "oblique_order_guard_tests.jl",
@@ -46,6 +47,7 @@ using Test
             include("oblique_gradient_tests.jl")
             include("oblique_symmetry_tests.jl")
             include("mumps_gradient_tests.jl")
+            include("pardiso_oblique_gradient_tests.jl")
         end
     end
 
