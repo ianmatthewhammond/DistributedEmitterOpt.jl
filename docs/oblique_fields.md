@@ -7,9 +7,12 @@ are rejected. `n_incident` is the lossless fluid index (air by default) and must
 match the environment. The time convention is exp(+iωt), material index n−ik,
 and physical E=envelope exp(−i k_parallel·r). The trial curl has the negative
 Bloch shift and the bilinear test curl has the positive shift. Oblique matrices
-are generally not complex symmetric. Use Pardiso `mtype=13` with
-`assume_symmetric_maxwell=false`; symmetric storage now checks the matrix before
-discarding a triangle and refuses incompatible operators.
+are generally not complex symmetric (A(κ)ᵀ = A(−κ)), so adjoint solves must be true
+Aᴴ solves. UMFPACK does this, and MUMPS solves Aᵀ conj(x) = conj(b). The Pardiso
+extension's adjoint is the legacy conj(A⁻¹ conj b), valid only for Aᵀ = A, so it
+refuses the factor of a non-symmetric matrix; use UMFPACK for oblique problems.
+Symmetric storage (Pardiso symmetric mtypes, MUMPS `symmetric=true`) checks the
+matrix before discarding a triangle and refuses incompatible operators.
 
 Polarization `:x` projects global x onto the transverse plane and normalizes it;
 `:y` completes the orthonormal basis. Thus x-plane tilt maps :x/:y to p/s, and
@@ -33,8 +36,9 @@ PEC/PMC across the other according to polarization. Both tilt axes require a
 full periodic cell. Any nonzero tilt across a mirror errors with the axis and
 boundary name. Mesh periodic links are inspected rather than trusting flags.
 
-Geometry L/W are widths of the independent mirror patch; a periodic direction
-has twice that field width. All fields share one model. A weighted collection
+Geometry L/W are widths of the independent mirror patch, which is half the
+lattice period: the lattice repeats every 2L × 2W, and a periodic direction has
+twice the patch width as its field width. All fields share one model. A weighted collection
 containing x and y tilts therefore uses the full union domain, including its
 normal pump. It does not yet give each tilt its own half-cell factorization.
 The grid still contains only design_shape independent 2D DOFs; material values
@@ -45,8 +49,14 @@ quarter/half/full values have the same independent-patch normalization.
 
 The new builder defaults to a structured hexahedral mesh with matched mirror
 intervals. `structured=false` keeps independent unstructured meshing; its
-finite-mesh symmetry error must then be checked by refinement. Existing
-`genmesh` calls retain their original tetrahedral behavior.
+finite-mesh symmetry error must then be checked by refinement. The builder
+always tags the CAD curves and points on the mirror walls (`genmesh(...;
+mirror_curves=true)`), so a PEC wall constrains every tangential degree of
+freedom on it for either kind of mesh. Existing `genmesh` calls retain their
+original tetrahedral behavior. Each generated mesh gets a recipe file
+(`meshfile * ".recipe"`) with its genmesh inputs; `reuse_mesh=true` refuses a
+mesh whose recipe differs from the one this call would write, and checks the
+extents and periodic links of an older mesh without a recipe.
 
 ## Collection sampling and solve counts
 
@@ -92,7 +102,13 @@ with reciprocal vector G has a different q and tensor; those orders are not
 absorbed exactly by the local specular tensor. Evanescent orders need sufficient
 homogeneous buffer to decay. Propagating nonspecular orders need a modal DtN or
 PML treatment for quantitatively reliable power. Uniform-film agreement does
-not establish that error for patterned structures.
+not establish that error for patterned structures. Bloch field configurations
+therefore check the lattice when their parameters are built
+(`check_diffraction_orders`): an order (m,n) ≠ (0,0) that propagates in the
+incidence medium, or in a lossless or low-loss substrate, is an error that
+names the order and the largest periods keeping every order evanescent. A
+warning is issued when the slowest evanescent order still has amplitude above
+1e-2 at the top or bottom face.
 
 ## Validation
 
@@ -112,7 +128,14 @@ unconjugated adjoint and must fail the gradient criterion.
 that assumes a complex symmetric operator. `test/oblique_solver_guard_tests.jl`
 checks matrix symmetry and refusal of incompatible Pardiso storage modes.
 `test/oblique_symmetry_tests.jl` checks transpose, signed angles, and half/full
-cells. `test/mixed_output_gradient_tests.jl` covers the corrected shared-model
+cells. `test/backend_adjoint_tests.jl` checks forward and Aᴴ residuals of every
+solver backend that loads on non-symmetric complex matrices.
+`test/oblique_order_guard_tests.jl` covers the diffraction-order guard,
+`test/oblique_mesh_reuse_tests.jl` the mesh recipe, and
+`test/oblique_normal_equivalence_tests.jl` shows that corrected normal incidence in
+air differs from legacy θ = 0 only by the normal-trace boundary term. The film
+reference also covers a lossy metal substrate. `test/runtests.jl` runs these files;
+`DEO_SLOW_TESTS=1` adds the gradient and symmetry suites. `test/mixed_output_gradient_tests.jl` covers the corrected shared-model
 vector/material mapping. `scripts/benchmark_angular_solves.jl` compares local
 sequential/concurrent factorization; no distributed scheduling layer is added.
 
