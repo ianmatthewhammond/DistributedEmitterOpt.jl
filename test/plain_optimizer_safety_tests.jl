@@ -47,6 +47,10 @@ function objective_and_gradient!(g, p, prob)
 end
 function log_iteration!(prob, g, p; kwargs...)
     push!(prob.g_history, g)
+    if g > prob.g_best   # best-record update, as in production
+        prob.g_best = g
+        prob.p_best .= p
+    end
 end
 save_checkpoint(prob, path; kwargs...) = push!(checkpoints, (;kwargs...))
 default_sim(sim) = sim
@@ -56,8 +60,18 @@ glc_void(p,g; kwargs...) = (isempty(g) || (g .= -3.0); -0.3)
 module MmaccsaBackend
 using ..PlainOptimizerFixture: return_code
 const captured_constraints = Ref{Any}(nothing)
+# (accepted, trials): evaluate the accepted point, then the trials, so the last
+# callback is a rejected trial; leave `p` at the accepted point, as the library does.
+const script = Ref{Any}(nothing)
 function minimize!(algorithm, objective, p; maxeval, kwargs...)
     captured_constraints[] = kwargs[:constraints]
+    if script[] !== nothing
+        accepted, trials = script[]
+        fmin = objective(copy(accepted), Float64[])
+        foreach(t -> objective(copy(t), Float64[]), trials)
+        p .= accepted
+        return (return_code[], fmin, p)
+    end
     n = return_code[] < 0 ? 3 : maxeval
     for _ in 1:n
         objective(p, similar(p))
@@ -127,6 +141,23 @@ end
     @test length(F.checkpoints) == 2
     @test all(c.current_epoch == 1 && c.epoch_evals == 5 for c in F.checkpoints)
     @test F.freed[] == 1
+end
+
+@testset "the final accepted design and its objective are returned" begin
+    F.return_code[] = 5
+    accepted = [0.1, 0.1]
+    g_accepted = sum(abs2, accepted) / F.flat_substrate_norm(nothing)
+    for trials in ([[0.9, 0.9]], [[0.9, 0.9], [0.05, 0.05]])
+        F.MmaccsaBackend.script[] = (accepted, trials)
+        p = F.problem()
+        g, design = F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0])
+        # A trial with a higher objective (here infeasible for sum(p) <= 0.3) is
+        # recorded as the best seen but never returned in place of the accepted design.
+        @test design == accepted && p.p == accepted
+        @test g == g_accepted && p.g == g_accepted
+        @test p.p_best == [0.9, 0.9] && p.g_best > g
+    end
+    F.MmaccsaBackend.script[] = nothing
 end
 
 if get(ENV,"TEST_RAW_TOLERANCE","0") == "1"

@@ -238,11 +238,9 @@ Keyword arguments:
   factor (default 1.0, no-op). A pure reparameterization: the feasible set is unchanged.
   Set large (e.g. 1e8) for constrained β=Inf epochs, where the raw constraint terms
   (~1e-6) are otherwise below one ULP of the objective inside the CCSA dual and the
-  dual line search fails (ret=-1). Known issues at constrained β=Inf, independent of
-  this fix: (1) `p_best` is objective-only selection, so under an active length-scale
-  constraint it systematically picks the most constraint-violating design in the
-  trajectory — prefer the final iterate; (2) each epoch resets CCSA ρ and σ to
-  defaults, discarding the previous epoch's learned trust-region state.
+  dual line search fails (ret=-1). Known issue at constrained β=Inf, independent of
+  this fix: each epoch resets CCSA ρ and σ to defaults, discarding the previous
+  epoch's learned trust-region state.
 - `constraint_tol_raw` -- absolute tolerance on each plain-path linewidth constraint
   M - b1 (default 1e-8, preserving legacy behavior). For an EPS-relative tolerance
   use e.g. 0.01 * prob.control.b1. Multiplied by constraint_scale in the standalone
@@ -463,11 +461,12 @@ function optimize!(prob::OptimizationProblem;
                 epigraph_config)
         end
 
-        # Return the best design seen across all epochs, not the last iterate
+        # Return the final accepted design, the one that satisfies the last epoch's
+        # constraints and matches prob.p and the checkpoint. The best objective seen
+        # (prob.g_best/prob.p_best) can come from an earlier beta or an infeasible trial.
         if prob.g_best > g_opt
-            log_info(:objective, "Returning best design (g_best > g_final)";
+            log_info(:objective, "Best objective seen exceeds the final design's; returning the final design (prob.p_best keeps the other)";
                 g_best=prob.g_best, g_final=g_opt)
-            return prob.g_best, copy(prob.p_best)
         end
         return g_opt, p_opt
     end
@@ -514,7 +513,13 @@ end
 # Single epoch
 # ---------------------------------------------------------------------------
 
-"""Run one epoch of optimization at fixed beta."""
+"""
+    run_epoch!(prob, max_iter, use_constraints, tol; kwargs...) -> (g_opt, p_opt, grad)
+
+Run one epoch of optimization at fixed beta. `p_opt` is the optimizer's accepted design
+and `g_opt` its objective. `grad` is the gradient at the last evaluated point, which
+need not be `p_opt`.
+"""
 function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
     g_norm::Float64=1.0,
     backup::Bool=false,
@@ -876,13 +881,15 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
     lb = zeros(Float64, np)
     ub = ones(Float64, np)
 
-    ret, _, _ = MmaccsaBackend.minimize!(algorithm, objective, p_opt;
+    ret, fmin, _ = MmaccsaBackend.minimize!(algorithm, objective, p_opt;
         lb=lb, ub=ub, maxeval=max_iter, ftol_rel=tol, state=state,
         constraints=constraints,
         checkpoint_callback=safe_checkpoint,
         rho_init=rho_init, sigma_init=sigma_init, verbose=ccsa_verbose, dual_algorithm)
 
-    g_opt = prob.g   # in DEO's max convention (set inside the callback)
+    # The backend's accepted point and its objective, in DEO's max convention. prob.g
+    # holds the last callback's value, which can be a rejected inner trial.
+    g_opt = -fmin
 
     free_state!(state)
 
