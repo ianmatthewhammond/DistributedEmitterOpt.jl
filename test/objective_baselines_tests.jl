@@ -30,20 +30,24 @@ const CASES = [
     CaseSpec("2D Foundry Anisotropic + Multi Output", true, true, false, false, false, 532.0, 532.0, true),
 ]
 
+# The two-polarization (multi-output) baselines changed when the shared model stopped
+# interpolating the pump field and projected material into the other polarization's
+# spaces (see map_field in SimulationBundle.jl); mixed_output_gradient_tests.jl checks
+# the gradient of the corrected objective against finite differences.
 const OBJECTIVE_BASELINES = Dict(
-    "3D Anisotropic + Multi Output" => (len=813, norm=14.345340287591288, obj=116460.59121184202),
+    "3D Anisotropic + Multi Output" => (len=813, norm=14.345340287591288, obj=114382.51789742465),
     "3D Inelastic Scattering" => (len=813, norm=14.345340287591288, obj=106857.88184860666),
     # Foundry baselines updated after the getgrid sizing fix (cube root +
     # design-restricted np): nx×ny dropped from 100×100 to 17×17, which
     # shifts every downstream value (p length, norm, objective).
-    "2D Foundry Anisotropic + Multi Output" => (len=289, norm=8.588540846480063, obj=1.0190166191632946e6),
+    "2D Foundry Anisotropic + Multi Output" => (len=289, norm=8.588540846480063, obj=1.0130235506433549e6),
     "2D Foundry Anisotropic" => (len=289, norm=8.588540846480063, obj=1.0102446065974964e6),
     "3D Surface Objective" => (len=813, norm=14.345340287591288, obj=1447.3803882181296),
     "3D With Damage Model" => (len=813, norm=14.345340287591288, obj=106625.11391929301),
     "3D Elastic Baseline" => (len=813, norm=14.345340287591288, obj=106625.11391929301),
     "3D Anisotropic (Elastic)" => (len=813, norm=14.345340287591288, obj=114082.55721479755),
     "2D Foundry Inelastic" => (len=289, norm=8.588540846480063, obj=915937.6261181335),
-    "3D Complex Configuration" => (len=813, norm=14.345340287591288, obj=108785.70661678203),
+    "3D Complex Configuration" => (len=813, norm=14.345340287591288, obj=106825.33861154002),
     "2D Foundry Mode" => (len=289, norm=8.588540846480063, obj=944212.861811626),
 )
 
