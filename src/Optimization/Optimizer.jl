@@ -304,6 +304,11 @@ function optimize!(prob::OptimizationProblem;
         (isfinite(epigraph_sigma) && epigraph_sigma > 0) ||
             throw(ArgumentError("epigraph_sigma must be finite and > 0 (got $epigraph_sigma)"))
     end
+    if robust_samples !== nothing && prob.foundry_mode &&
+       prob.control.foundry_projection_mode === :legacy
+        throw(ArgumentError("robust_samples need foundry_projection_mode=:current; " *
+            ":legacy projects on the 2D grid, which has no sidewall model"))
+    end
     epigraph_config = _epigraph_config(robust_mode, epigraph_tol, epigraph_sigma,
                                        prob.control.b1, epigraph_linewidth_tol)
     with_run_logger(prob.pde.env.logger_cfg; root=prob.root) do
