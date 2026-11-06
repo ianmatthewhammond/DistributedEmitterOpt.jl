@@ -160,7 +160,7 @@ end
     F.MmaccsaBackend.script[] = nothing
 end
 
-if get(ENV,"TEST_RAW_TOLERANCE","0") == "1"
+begin
     @testset "raw tolerance reaches both standalone constraints" begin
         F.return_code[] = 5
         for backend in (:standalone_mma,:standalone_ccsaq), raw in (1e-8,6e-14), cs in (1.0,1e8)

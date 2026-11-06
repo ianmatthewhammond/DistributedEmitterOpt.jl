@@ -30,5 +30,29 @@ using Test
         include("pml_tests.jl")
     end
 
+    # Separate namespaces: these files define their own fixtures and constants.
+    for (name, file) in (("Optimizer Safety Tests", "plain_optimizer_safety_tests.jl"),
+                         ("Checkpoint Tolerance Tests", "raw_tolerance_checkpoint_tests.jl"),
+                         ("Mixed Output Gradient Tests", "mixed_output_gradient_tests.jl"))
+        @testset "$name" begin
+            sandbox = Module(gensym(:Tests))
+            Core.eval(sandbox, :(include(path) = Base.include($sandbox, path)))
+            Base.include(sandbox, joinpath(@__DIR__, file))
+        end
+    end
+
     include("sidewall_runtests.jl")
+
+    # Each in its own process: NLopt.jl and the standalone library both export
+    # `nlopt_*` symbols, and sharing a process would invalidate the parity check.
+    @testset "Standalone Backend Tests" begin
+        if STANDALONE_LIBRARY_READY
+            for file in ("test_mmaccsa_backend.jl", "test_backend_parity.jl")
+                cmd = `$(Base.julia_cmd()) --project=$(dirname(@__DIR__)) $(joinpath(@__DIR__, file))`
+                @test success(pipeline(cmd; stdout=stdout, stderr=stderr))
+            end
+        else
+            @test_skip "needs NLopt-MMA-CCSA"
+        end
+    end
 end
