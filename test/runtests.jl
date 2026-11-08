@@ -26,6 +26,10 @@ using Test
         include("logger_tests.jl")
     end
 
+    @testset "Projection Derivative Tests" begin
+        include("projection_derivative_tests.jl")
+    end
+
     @testset "PML Tests" begin
         include("pml_tests.jl")
     end
