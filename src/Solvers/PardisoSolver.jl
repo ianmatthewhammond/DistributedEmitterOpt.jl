@@ -65,11 +65,16 @@ const SYMMETRY_RTOL = 1e-12
 """
     symmetry_defect(A) -> Float64
 
-‖A − Aᵀ‖_F / ‖A‖_F of a square sparse matrix, computed without forming Aᵀ.
+‖A − Aᵀ‖_F / ‖A‖_F of a square sparse matrix, computed without forming Aᵀ. Entries are
+scaled by the largest magnitude first, so the result does not depend on the matrix's scale;
+an all-zero matrix has defect 0.
 """
 function symmetry_defect(A::SparseMatrixCSC)
     n = LinearAlgebra.checksquare(A)
-    rows, vals = rowvals(A), nonzeros(A)
+    rows = rowvals(A)
+    m = isempty(nonzeros(A)) ? 0.0 : maximum(abs, nonzeros(A))
+    m == 0 && return 0.0
+    vals = nonzeros(A) ./ m
     s = 0.0
     for j in 1:n, k in nzrange(A, j)
         r = nzrange(A, rows[k])                # column i = rows[k] holds A[j, i] if stored

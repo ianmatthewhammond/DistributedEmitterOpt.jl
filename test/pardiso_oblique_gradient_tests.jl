@@ -51,7 +51,8 @@ function compare_types(label, prob)
         @test dgrad < 1e-10
     end
     println("PARDISO $label seconds: umfpack=$(umfpack.t) auto=$(auto.t) forced13=$(full.t)")
-    @test all(==(13), values(maxwell_mtypes(full.q)))
+    forced = maxwell_mtypes(full.q)
+    @test !isempty(forced) && all(==(13), values(forced))
     types = maxwell_mtypes(auto.q)
     println("PARDISO $label automatic types: $types")
     return types
@@ -77,7 +78,7 @@ else
         println("PARDISO shortcut adjoint (negative control): ladder=$bad")
         @test minimum(bad) > 1e-2
         types = compare_types("oblique emission", oblique)
-        @test all(==(13), values(types))
+        @test !isempty(types) && all(==(13), values(types))
 
         # 45° pump, normal emission on the same half cell: the emission factor is symmetric.
         normal_emission = [FieldConfig(532; tilt_y=0, pol=:y)]

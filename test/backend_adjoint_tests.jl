@@ -82,10 +82,12 @@ end
 
         # A complex symmetric matrix gets complex symmetric storage (mtype 6, one triangle) by
         # default and when forced; a non-symmetric one gets mtype 13 unless 6 is forced.
+        # Z stores no diagonal at all, which the one-triangle storage must still carry.
+        Z = sparse([1, 2], [2, 1], ComplexF64[1 + 0.5im, 1 + 0.5im], 2, 2)
         @test DEO.lu!(s, B).mtype == 13
         @test DEO.lu!(PardisoSolver(assume_symmetric_maxwell=false), S).mtype == 13
         for s6 in (PardisoSolver(), PardisoSolver(assume_symmetric_maxwell=true)),
-            M in (S, B + transpose(B))
+            M in (S, B + transpose(B), Z)
             f = DEO.lu!(s6, M)
             @test f.mtype == 6
             @test solve_sequence(s6, f, M, rng) < 1e-11
@@ -187,6 +189,12 @@ end
     @test DEO.symmetry_defect(B) ≈ norm(B - transpose(B)) / norm(B)   # also one-sided entries
     @test DEO.symmetry_defect(S) == 0
     @test DEO.symmetry_defect(Rs) == 0
+    # Scale-free: an unsymmetric matrix far below floating-point squares is still unsymmetric.
+    tiny = sparse(1e-200 .* ComplexF64[2 1; 0 2])
+    @test DEO.symmetry_defect(tiny) ≈ sqrt(2) / 3
+    @test DEO.symmetry_defect(1e200 * B) ≈ DEO.symmetry_defect(B)
+    @test DEO.checked_maxwell_mtype(PardisoSolver(), tiny) == 13
+    @test DEO.symmetry_defect(spzeros(ComplexF64, 3, 3)) == 0
     @test DEO.checked_maxwell_mtype(PardisoSolver(), B + transpose(B)) == 6
     @test DEO.checked_maxwell_mtype(PardisoSolver(), B) == 13
     @test DEO.checked_mumps_sym(false, A) == 0

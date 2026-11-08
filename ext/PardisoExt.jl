@@ -29,7 +29,7 @@ module PardisoExt
 import DistributedEmitterOpt
 import DistributedEmitterOpt: lu!, filter_lu!, solve!, solve_adjoint!, release_factor!
 import Pardiso
-using SparseArrays: SparseMatrixCSC, tril
+using SparseArrays: SparseMatrixCSC, tril, findnz, nzrange, rowvals, sparse
 
 # ---------------------------------------------------------------------------
 # Factor wrapper
@@ -47,7 +47,17 @@ mutable struct PardisoFactor{T}
 end
 
 one_triangle(mtype::Int) = mtype in (2, -2, 6)
-storage(A, mtype::Int) = one_triangle(mtype) ? tril(A) : A
+storage(A, mtype::Int) = one_triangle(mtype) ? with_diagonal(tril(A)) : A
+
+# MKL Pardiso's symmetric types need every diagonal entry stored, zeros included. In a lower
+# triangle the diagonal is the first stored entry of its column.
+function with_diagonal(L::SparseMatrixCSC{T}) where T
+    n = size(L, 1)
+    rows = rowvals(L)
+    all(j -> !isempty(nzrange(L, j)) && rows[first(nzrange(L, j))] == j, 1:n) && return L
+    I, J, V = findnz(L)
+    return sparse(vcat(I, 1:n), vcat(J, 1:n), vcat(V, zeros(T, n)), n, n)   # keeps explicit zeros
+end
 same_pattern(f::PardisoFactor, A) =
     size(A) == (f.n, f.n) && A.colptr == f.colptr && A.rowval == f.rowval
 
