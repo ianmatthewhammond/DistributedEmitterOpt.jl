@@ -244,7 +244,19 @@ function needs_renumber(model)::Bool
     end
 end
 
-"""Fix Gmsh model by removing bad vertices and rebuilding topology."""
+"""
+Fix a Gmsh model whose mesh has orphan nodes (nodes in no top-dimensional cell).
+
+gmsh's 3D Delaunay occasionally leaves interior nodes that no tetrahedron uses.
+The orphans are removed from the gmsh model itself, then GridapGmsh builds grid,
+topology and labeling through its normal path, so every table stays consistent.
+(The ported version edited GridapGmsh's tables by hand after the fact; it shifted
+indices in ascending order and corrupted the vertex→face tables, which made
+Nédélec spaces fail with a `BoundsError`.)
+
+`bad_vertices` are the vertices `repair_gmsh_model` found with no cells; it is
+used only as a cross-check on the orphans found here.
+"""
 function fix_gmsh_model(mshfile::String, bad_vertices::AbstractArray; renumber::Bool=true)
     GridapGmsh.@check_if_loaded
     if !isfile(mshfile)
@@ -253,99 +265,58 @@ function fix_gmsh_model(mshfile::String, bad_vertices::AbstractArray; renumber::
 
     gmsh = GridapGmsh.gmsh
     gmsh.initialize()
-    gmsh.option.setNumber("General.Terminal", 1)
-    gmsh.option.setNumber("Mesh.SaveAll", 1)
-    gmsh.option.setNumber("Mesh.MedImportGroupsOfNodes", 1)
-    gmsh.open(mshfile)
-    renumber && gmsh.model.mesh.renumberNodes()
-    renumber && gmsh.model.mesh.renumberElements()
-
-    Dc = GridapGmsh._setup_cell_dim(gmsh)
-    Dp = GridapGmsh._setup_point_dim(gmsh, Dc)
-    node_to_coords = GridapGmsh._setup_node_coords(gmsh, Dp)
-    vertex_to_node, node_to_vertex = GridapGmsh._setup_nodes_and_vertices(gmsh, node_to_coords)
-    vertex_to_node = Vector{Int64}(vertex_to_node)
-    node_to_vertex = Vector{Int64}(node_to_vertex)
-    grid, cell_to_entity = GridapGmsh._setup_grid(gmsh, Dc, Dp, node_to_coords, node_to_vertex)
-    cell_to_vertices, vertex_to_node, node_to_vertex =
-        GridapGmsh._setup_cell_to_vertices(grid, vertex_to_node, node_to_vertex)
-
-    grid_topology = GridapGmsh.UnstructuredGridTopology(grid, cell_to_vertices, vertex_to_node)
-    labeling = GridapGmsh._setup_labeling(gmsh, grid, grid_topology, cell_to_entity, vertex_to_node, node_to_vertex)
-
-    # Fix node coordinates
-    for vertex in sort(bad_vertices)
-        deleteat!(grid.node_coordinates, vertex)
-        deleteat!(vertex_to_node, vertex)
-        vertex_to_node[vertex:end] .-= 1
-        deleteat!(node_to_vertex, vertex)
-        node_to_vertex[vertex:end] .-= 1
-    end
-
-    # Fix grid topology
-    oldmat = grid_topology.n_m_to_nface_to_mfaces
-    for i in 1:4
-        if !isassigned(oldmat, i)
-            continue
+    model = try
+        gmsh.option.setNumber("General.Terminal", 1)
+        gmsh.option.setNumber("Mesh.SaveAll", 1)
+        gmsh.option.setNumber("Mesh.MedImportGroupsOfNodes", 1)
+        gmsh.open(mshfile)
+        n_orphans = remove_orphan_nodes!(gmsh)
+        if n_orphans != length(bad_vertices)
+            @warn "fix_gmsh_model: removed $n_orphans orphan nodes, expected $(length(bad_vertices))"
         end
-        dct = Gridap.Geometry.to_dict(oldmat[i, 1])
-        for vertex in bad_vertices
-            if i == 1
-                deleteat!(dct[:ptrs], length(dct[:ptrs]))
-                deleteat!(dct[:data], length(dct[:ptrs]))
-            else
-                for (k, d) in enumerate(dct[:data])
-                    if d > vertex
-                        dct[:data][k] -= 1
-                    end
-                end
-            end
-        end
-        grid_topology.n_m_to_nface_to_mfaces[i, 1] =
-            Gridap.Geometry.from_dict(Gridap.Arrays.Table{Int32,Vector{Int32},Vector{Int32}}, dct)
+        renumber && gmsh.model.mesh.renumberNodes()
+        renumber && gmsh.model.mesh.renumberElements()
+        GridapGmsh.GmshDiscreteModel(gmsh)
+    finally
+        gmsh.finalize()
     end
-    for j in 2:4
-        if !isassigned(oldmat, 4 * (j - 1) + 1)
-            continue
-        end
-        dct = Gridap.Geometry.to_dict(oldmat[1, j])
-        for vertex in bad_vertices
-            deleteat!(dct[:ptrs], vertex)
-            deleteat!(dct[:data], vertex)
-        end
-        grid_topology.n_m_to_nface_to_mfaces[1, j] =
-            Gridap.Geometry.from_dict(Gridap.Arrays.Table{Int32,Vector{Int32},Vector{Int32}}, dct)
-    end
-
-    # Fix cell node ids
-    old_table = Gridap.Geometry.to_dict(grid.cell_node_ids)
-    for vertex in bad_vertices
-        for (i, d) in enumerate(old_table[:data])
-            if d > vertex
-                old_table[:data][i] -= 1
-            end
-        end
-    end
-    new_table =
-        Gridap.Geometry.from_dict(Gridap.Arrays.Table{Int32,Vector{Int32},Vector{Int32}}, old_table)
-    grid = Gridap.Geometry.UnstructuredGrid(
-        grid.node_coordinates,
-        new_table,
-        grid.reffes,
-        grid.cell_types,
-        grid.orientation_style,
-        grid.facet_normal
-    )
-
-    # Fix labeling
-    for vertex in bad_vertices
-        deleteat!(labeling.d_to_dface_to_entity[1], vertex)
-    end
-
-    model = GridapGmsh.UnstructuredDiscreteModel(grid, grid_topology, labeling)
-
-    gmsh.finalize()
     return model
+end
+
+"""
+Remove nodes of the loaded gmsh model that no top-dimensional element uses.
+
+Each entity of the cell dimension holding orphans is cleared and re-meshed with
+the same nodes (minus the orphans) and the same elements. Returns the number of
+nodes removed.
+"""
+function remove_orphan_nodes!(gmsh)
+    Dc = GridapGmsh._setup_cell_dim(gmsh)
+    _, _, cell_nodes = gmsh.model.mesh.getElements(Dc)
+    used = Set{UInt64}()
+    for t in cell_nodes
+        union!(used, t)
+    end
+
+    n_removed = 0
+    for d in 0:Dc, (dim, tag) in gmsh.model.getEntities(d)
+        node_tags, coords, _ = gmsh.model.mesh.getNodes(dim, tag, false, false)
+        keep = findall(t -> t in used, node_tags)
+        length(keep) == length(node_tags) && continue
+        if dim != Dc
+            error("Orphan mesh nodes on entity (dim=$dim, tag=$tag); only orphans " *
+                  "interior to $Dc-dimensional entities can be repaired")
+        end
+        etypes, etags, enodes = gmsh.model.mesh.getElements(dim, tag)
+        gmsh.model.mesh.clear([(dim, tag)])
+        xyz = reshape(coords, 3, :)[:, keep]
+        gmsh.model.mesh.addNodes(dim, tag, node_tags[keep], vec(xyz))
+        for (etype, et, en) in zip(etypes, etags, enodes)
+            gmsh.model.mesh.addElements(dim, tag, [etype], [et], [en])
+        end
+        n_removed += length(node_tags) - length(keep)
+    end
+    return n_removed
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
