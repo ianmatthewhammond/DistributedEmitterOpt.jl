@@ -3,6 +3,7 @@
 # period with every air order evanescent is λ/(1 + sin 45°) ≈ 190.4 nm: 170 nm passes, 340 nm
 # (geo.L = 170, since the angular builder's L is half the lattice period) does not.
 using DistributedEmitterOpt, Gridap, Test
+using SparseArrays: nonzeros
 const DEO = DistributedEmitterOpt
 
 @testset "Propagating diffraction orders are refused" begin
@@ -75,4 +76,21 @@ const DEO = DistributedEmitterOpt
             @test DEO.build_phys_params(fc, backed, DEO.sim_for(pec, fc)) isa DEO.PhysicalParams
         end
     end
+
+    # Assembly over a PEC bottom never builds the substrate admittance. A lossless n = 0.5
+    # substrate under a 30° tilt from air has its specular order exactly at cutoff
+    # (q² = k²/4 − (k/2)² = 0), where that admittance is undefined.
+    geo = SymmetricGeometry(λ; L=85.0, W=85.0, hd=30.0, hsub=60.0)
+    geo.hair = 300; geo.hs = 200; geo.ht = 80
+    geo.l1 = 30.0; geo.l2 = 15.0; geo.l3 = 30.0
+    fc = FieldConfig(λ; tilt_y=30, pol=:x)
+    pec = build_angular_simulation(geo, [fc]; meshfile=joinpath(mktempdir(), "cutoff.msh"),
+        design_shape=(5, 5), structured=false, bot_PEC=true)
+    s = DEO.sim_for(pec, fc)
+    cutoff = Environment(mat_design="Al", mat_substrate=0.5, mat_fluid=1.0, bot_PEC=true)
+    phys = DEO.build_phys_params(fc, cutoff, s)
+    pt = DEO.interpolate(x -> 0.5, s.Pf)
+    A = DEO.assemble_maxwell(pt, s, phys)
+    @test size(A, 1) == size(A, 2) > 0
+    @test all(isfinite, nonzeros(A))
 end

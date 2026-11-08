@@ -21,7 +21,8 @@ already: every right-hand side runs a solve, and new values on an unchanged spar
 pattern reuse the analysis. Each phase checks INFOG(1), and a factorization that
 runs out of workspace is retried with ICNTL(14) doubled. MUMPS memory lives outside
 Julia's GC, so factors are released explicitly (and before MPI is finalized at
-exit). Output is limited to errors unless `MUMPSSolver(verbose=true)`.
+exit): a solver pool dropped without `release_factor!` or `empty!` keeps its MUMPS
+factors until the process exits. Output is limited to errors unless `MUMPSSolver(verbose=true)`.
 
 Polarization `:x` projects global x onto the transverse plane and normalizes it;
 `:y` completes the orthonormal basis. Thus x-plane tilt maps :x/:y to p/s, and
