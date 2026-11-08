@@ -153,13 +153,15 @@ function assemble_bloch_maxwell(pt, sim, phys)
     ε₀ = x -> ε_background_wf(x, phys)
     εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
     top = specular_admittance(k, phys.nf^2*(1-im*phys.α), κ)
-    bottom = specular_admittance(k, phys.ns^2*(1-im*phys.α), κ)
+    # A PEC bottom has no radiation condition, so its admittance is never built: the
+    # substrate's specular order may sit at cutoff there.
+    bottom = phys.bot_PEC ? nothing : specular_admittance(k, phys.ns^2*(1-im*phys.α), κ)
     assemble_matrix(sim.U, sim.V) do u, v
         # exp(+iωt), physical field = envelope * exp(-iκ⋅r).
-        ∫(shifted_curl_op(v, κ) ⋅ shifted_curl_op(u, -κ))sim.dΩ -
-        k^2*∫(v ⋅ (ε₀*u))sim.dΩ - k^2*∫(v ⋅ (εₘ*u))sim.dΩ_design +
-        im*∫(v ⋅ (top ∘ u))sim.dS_top +
-        (phys.bot_PEC ? 0.0im : im)*∫(v ⋅ (bottom ∘ u))sim.dS_bottom
+        a = ∫(shifted_curl_op(v, κ) ⋅ shifted_curl_op(u, -κ))sim.dΩ -
+            k^2*∫(v ⋅ (ε₀*u))sim.dΩ - k^2*∫(v ⋅ (εₘ*u))sim.dΩ_design +
+            im*∫(v ⋅ (top ∘ u))sim.dS_top
+        isnothing(bottom) ? a : a + im*∫(v ⋅ (bottom ∘ u))sim.dS_bottom
     end
 end
 
