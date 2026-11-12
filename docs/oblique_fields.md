@@ -192,7 +192,8 @@ normal emission of a tilted pump) gets mtype 6, which keeps one triangle. Any ot
 such as an oblique Bloch operator, gets mtype 13 in full storage. With mtype 13 the
 forward solve is Pardiso's transposed solve and the adjoint is its plain solve on
 conj(b), conjugated; with mtype 6 both are plain solves, and the conjugated one is
-the exact adjoint. `assume_symmetric_maxwell` keeps its meaning when it is given:
+the exact adjoint of the stored symmetric operator. That is the matrix itself to within the
+10⁻¹² symmetry tolerance it was accepted under. `assume_symmetric_maxwell` keeps its meaning when it is given:
 `true` forces mtype 6 (refused for a matrix that is not complex symmetric) and
 `false` forces mtype 13. Its default is now `nothing`, the per-factorization choice;
 it used to be `false`. The Helmholtz filter uses mtype -2 by default; 2 and 11 are

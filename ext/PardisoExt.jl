@@ -15,7 +15,8 @@ so oblique Bloch operators, which are not complex symmetric, get true adjoints. 
 types keep one triangle and are used only for a matrix checked to be symmetric: Maxwell
 mtype 6, which `checked_maxwell_mtype` picks by default for each factorization whose
 matrix is complex symmetric (normal incidence), and filter mtypes -2 and 2. For them the
-same plain solve on conj(b) is the exact adjoint.
+same plain solve on conj(b) is the exact adjoint of the stored symmetric operator (the
+matrix itself to within the symmetry tolerance it was accepted under).
 
 The analysis is reused while the sparsity pattern matches a copy taken when it ran. A factor
 is released once, by `release_factor!` or when its factorization fails. A dropped factor is
