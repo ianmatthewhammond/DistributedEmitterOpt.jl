@@ -36,7 +36,7 @@ _epigraph_config(args...) = nothing
 _robust_sharpness_record(args...) = nothing
 with_run_logger(f; kwargs...) = f()
 with_run_logger(f, config; kwargs...) = f()
-flat_substrate_norm(prob) = 2.0
+flat_substrate_norm(prob) = (prob === nothing || (prob.g = 999.0); 2.0)   # production's flat evaluation overwrites prob.g
 log_info(args...; kwargs...) = nothing
 log_debug(args...; kwargs...) = nothing
 const warnings = Any[]
@@ -54,6 +54,16 @@ function log_iteration!(prob, g, p; kwargs...)
     end
 end
 save_checkpoint(prob, path; kwargs...) = push!(checkpoints, (;kwargs...))
+# Resume: the loaded design/objective and metadata come from `resume_state`; the
+# production `_checkpoint_resume_progress` turns the metadata into a start epoch.
+const resume_state = Ref{Any}(nothing)
+const validated = Ref{Any}(nothing)
+function resume_from_checkpoint!(prob, path; return_metadata=false)
+    st = resume_state[]
+    prob.p .= st.p; prob.g = st.g; prob.iteration = st.iteration
+    return st.metadata
+end
+_validate_checkpoint_metadata!(md; kwargs...) = (validated[] = (;kwargs...); nothing)
 default_sim(sim) = sim
 # Constraint values: fixed by default; `final_values` overrides them for gradient-free
 # calls (the final feasibility check) so a test can set the returned design's values.
@@ -62,10 +72,12 @@ const gradfree_calls = Ref(0)
 function glc_solid(p,g; kwargs...)
     isempty(g) || (g .= 2.0; return 0.2)
     gradfree_calls[] += 1
+    final_values[] isa Function && return final_values[](kwargs[:control].β)[1]
     return final_values[] === nothing ? 0.2 : final_values[][1]
 end
 function glc_void(p,g; kwargs...)
     isempty(g) || (g .= -3.0; return -0.3)
+    final_values[] isa Function && return final_values[](kwargs[:control].β)[2]
     return final_values[] === nothing ? -0.3 : final_values[][2]
 end
 
@@ -106,8 +118,9 @@ function load_optimizer(path)
             sig = sig isa Expr && sig.head == :where ? sig.args[1] : sig
             if sig isa Expr && sig.head == :call
                 name = sig.args[1]
-                if name in (:optimize!, :run_epoch!, :_run_epoch_standalone!, :linewidth_feasibility) &&
-                   occursin("prob::OptimizationProblem", string(sig))
+                if (name in (:optimize!, :run_epoch!, :_run_epoch_standalone!, :linewidth_feasibility,
+                             :_set_epoch_state!) &&
+                    occursin("prob::OptimizationProblem", string(sig))) || name === :_checkpoint_resume_progress
                     Core.eval(@__MODULE__, ex)
                     push!(loaded,name)
                 end
@@ -117,7 +130,8 @@ function load_optimizer(path)
         foreach(visit,ex.args)
     end
     visit(parsed)
-    loaded == Set([:optimize!,:run_epoch!,:_run_epoch_standalone!,:linewidth_feasibility]) || error("missing production functions: $loaded")
+    loaded == Set([:optimize!,:run_epoch!,:_run_epoch_standalone!,:linewidth_feasibility,
+                   :_set_epoch_state!,:_checkpoint_resume_progress]) || error("missing production functions: $loaded")
 end
 end
 
@@ -250,4 +264,70 @@ end
     @test F.linewidth_feasibility(pf, [0.5, 0.5]; tol=0.1).feasible
     @test !F.linewidth_feasibility(pf, [0.5, 0.5]; tol=0.099).feasible
     F.final_values[] = nothing
+end
+
+# Metadata as `_checkpoint_metadata` returns it, for the fields optimize! reads.
+resume_md(; current_epoch, epoch_evals, g_norm=nothing) = (; exact_resume=true, current_epoch,
+    epoch_evals, mma_state_path=nothing, epigraph_T=nothing, epigraph_tau=nothing, g_norm,
+    constraint_scale=nothing)
+
+@testset "a completed resume restores the last epoch's state before returning" begin
+    F.return_code[] = 5
+    F.MmaccsaBackend.script[] = nothing
+    # Feasible only at the last epoch's beta: a check at the constructed beta=8 would warn.
+    F.final_values[] = β -> β == Inf ? (-1.0, -1.0) : (1.0, 1.0)
+    F.resume_state[] = (; p=[0.1, 0.1], g=0.01, iteration=10,
+        metadata=resume_md(current_epoch=2, epoch_evals=5))   # no g_norm: the flat evaluation runs
+    p = F.problem(); p.foundry_mode = true; empty!(F.warnings)
+    @test p.control.β == 8.0
+    g, design = F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
+        use_constraints=true, resume_from="injected", on_infeasible=:error)
+    @test p.control.β == Inf
+    @test isempty(F.warnings)
+    @test design == [0.1, 0.1] && g == 0.01
+    @test p.g == 0.01            # not the flat evaluation's 999
+    @test p.iteration == 10      # no epoch ran
+    F.final_values[] = nothing
+end
+
+@testset "an exact resume reuses the checkpoint's normalization" begin
+    F.return_code[] = 5
+    accepted = [0.1, 0.1]
+    F.MmaccsaBackend.script[] = (accepted, [])
+    for (ck_norm, used) in ((7.0, 7.0), (nothing, 2.0))
+        F.resume_state[] = (; p=[0.4, 0.6], g=0.3, iteration=2,
+            metadata=resume_md(current_epoch=1, epoch_evals=2, g_norm=ck_norm))
+        p = F.problem()
+        g, design = F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0],
+            resume_from="injected")
+        @test g == sum(abs2, accepted) / used
+    end
+    F.MmaccsaBackend.script[] = nothing
+end
+
+@testset "constraint scale is recorded and passed to resume validation" begin
+    F.return_code[] = 5
+    F.resume_state[] = (; p=[0.4, 0.6], g=0.3, iteration=2,
+        metadata=resume_md(current_epoch=1, epoch_evals=2))
+    # Recorded only when constraints are on (NLopt, which ignores the scale, records none).
+    for (backend, cons, cs, want) in ((:standalone_mma, true, 1e8, 1e8),
+                                      (:standalone_ccsaq, true, 1.0, 1.0),
+                                      (:standalone_mma, false, 1e8, nothing))
+        empty!(F.checkpoints)
+        p = F.problem(); p.foundry_mode = true
+        F.optimize!(p; backend, max_iter=5, β_schedule=[8.0], use_constraints=cons,
+            constraint_scale=cs, resume_from="injected", backup=true, backup_every=0,
+            backup_path="injected")
+        @test F.validated[].constraint_scale === want
+        @test all(c.constraint_scale === want && c.g_norm == 2.0 for c in F.checkpoints)
+    end
+end
+
+@testset "invalid KS sharpness is refused before any evaluation" begin
+    for bad in (0.0, -1.0, NaN, -Inf)
+        p = F.problem()
+        @test_throws ArgumentError F.optimize!(p; backend=:standalone_mma, max_iter=5,
+            β_schedule=[8.0], robust_samples=[(0.0, 0.0)], robust_sharpness=bad)
+        @test p.iteration == 0
+    end
 end

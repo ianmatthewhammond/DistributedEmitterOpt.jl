@@ -81,6 +81,10 @@ const DEO = DistributedEmitterOpt
             @test_throws ArgumentError ks_softmin([1.0, 2.0], 5.0; scale=0.0)
             @test_throws ArgumentError ks_softmin([1.0, 2.0], 5.0; scale=-1.0)
             @test_throws ArgumentError ks_softmin([1.0, 2.0], 5.0; scale=NaN)
+            # sharpness: negative is a soft maximum, zero divides by zero, NaN is not Inf
+            for bad in (0.0, -1.0, NaN, -Inf)
+                @test_throws ArgumentError ks_softmin([1.0, 2.0], bad)
+            end
             # exact-min mode needs no scale at all
             @test ks_softmin([3.0, 1.0, 2.0], Inf)[1] == 1.0
         end

@@ -41,6 +41,7 @@ using Test
     # Separate namespaces: these files define their own fixtures and constants.
     for (name, file) in (("Optimizer Safety Tests", "plain_optimizer_safety_tests.jl"),
                          ("Checkpoint Tolerance Tests", "raw_tolerance_checkpoint_tests.jl"),
+                         ("Checkpoint State Tests", "checkpoint_state_tests.jl"),
                          ("Mixed Output Gradient Tests", "mixed_output_gradient_tests.jl"))
         @testset "$name" begin
             sandbox = Module(gensym(:Tests))

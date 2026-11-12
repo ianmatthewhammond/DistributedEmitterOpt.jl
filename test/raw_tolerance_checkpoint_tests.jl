@@ -23,3 +23,15 @@ validate(md;kw...) = DEO._validate_checkpoint_metadata!(md;filepath="test-checkp
         @test md.constraint_tol_raw==raw
     end
 end
+@testset "constraint scale and normalization are recorded and checked on resume" begin
+    md=DEO._checkpoint_metadata(base())
+    @test md.g_norm===nothing && md.constraint_scale===nothing
+    @test validate(md;constraint_scale=1e8)===nothing     # older checkpoint: not checked
+    scaled=DEO._checkpoint_metadata(merge(base(),Dict("constraint_scale"=>1e8,"g_norm"=>7.0)))
+    @test scaled.constraint_scale==1e8 && scaled.g_norm==7.0
+    @test validate(scaled;constraint_scale=1e8)===nothing
+    @test_throws ArgumentError validate(scaled;constraint_scale=1.0)
+    md2=DEO._iteration_checkpoint_metadata(1,3,5,[Inf],nothing,:standalone_mma,true;
+        g_norm=7.0,constraint_scale=1e8)
+    @test md2.g_norm==7.0 && md2.constraint_scale==1e8
+end
