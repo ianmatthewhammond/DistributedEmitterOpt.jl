@@ -44,6 +44,32 @@ const DEO = DistributedEmitterOpt
     tfc = DEO.incident_config(p.env, λ; θ=20.0, pol=:y)
     @test DEO.build_phys_params(tfc, p.env, DEO.sim_for(hsim, tfc)) isa DEO.PhysicalParams
 
+    # An explicit environment sets the fluid the tilt is measured in.
+    air = Environment(mat_design="Ag", mat_fluid=1.0)
+    @test MaxwellProblem(532.0; θ=20.0, env=air).inputs[1].n_incident == 1.0
+    @test MaxwellProblem(325.0, 342.8; θ=20.0, env=air).outputs[1].n_incident == 1.0
+
+    # reuse_mesh with a PEC bottom: a mesh made with the closure is accepted; a recipe from
+    # before it (angular-cell-2) and a recipe-free mesh without BottomZ curve tags are refused.
+    rfc = FieldConfig(λ; tilt_y=20, pol=:x)
+    reuse(file) = build_angular_simulation(geo, [rfc]; meshfile=file, design_shape=(5, 5),
+        structured=false, reuse_mesh=true, bot_PEC=true)
+    dir = mktempdir()
+    good = joinpath(dir, "pec.msh")
+    reuse(good)                                   # generated with the closure, recipe written
+    @test DEO.default_sim(reuse(good)).per_y
+    stale = joinpath(dir, "stale.msh")
+    cp(good, stale)
+    write(stale * ".recipe", replace(read(good * ".recipe", String), "angular-cell-3" => "angular-cell-2"))
+    @test_throws ArgumentError reuse(stale)
+    old = joinpath(dir, "old.msh")
+    fg = deepcopy(geo)
+    fg.W *= 2
+    DEO.genmesh(fg, old; per_x=false, per_y=true, center_xy=(0.0, geo.W / 2), mirror_curves=false)
+    msg = try reuse(old); "" catch err; err isa ArgumentError ? err.msg : rethrow() end
+    println("PEC REUSE refusal: ", msg)
+    @test occursin("BottomZ", msg)
+
     legacy = Dict{Tuple{Float64,Float64,Symbol},Vector{ComplexF64}}()
     @test hasmethod(DEO.solve_adjoint!, Tuple{MaxwellProblem,typeof(legacy),Any,Any})
 end

@@ -36,16 +36,14 @@ incident_config(env::Environment, λ::Real; θ::Real=0.0, pol::Symbol=:y) =
 
 """Single-wavelength elastic scattering."""
 function MaxwellProblem(λ::Float64; θ::Float64=0.0, pol::Symbol=:y,
-    mat_design::MaterialSpec="Ag", kwargs...)
-    env = Environment(mat_design=mat_design)
+    mat_design::MaterialSpec="Ag", env::Environment=Environment(mat_design=mat_design), kwargs...)
     MaxwellProblem(env=env, inputs=[incident_config(env, λ; θ, pol)]; kwargs...)
 end
 
 """Pump/emission pair (inelastic)."""
 function MaxwellProblem(λ_pump::Float64, λ_emission::Float64;
     θ::Float64=0.0, pol::Symbol=:y,
-    mat_design::MaterialSpec="Ag", kwargs...)
-    env = Environment(mat_design=mat_design)
+    mat_design::MaterialSpec="Ag", env::Environment=Environment(mat_design=mat_design), kwargs...)
     MaxwellProblem(
         env=env,
         inputs=[incident_config(env, λ_pump; θ, pol)],

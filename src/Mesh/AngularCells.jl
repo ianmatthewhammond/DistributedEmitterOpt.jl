@@ -47,7 +47,7 @@ function build_angular_simulation(geo::SymmetricGeometry, configs;
     center = (px ? geo.L/2 : 0.0, py ? geo.W/2 : 0.0)
     recipe = angular_mesh_recipe(field_geo, px, py, shape, center)
     if reuse_mesh && isfile(meshfile)
-        check_reused_mesh(meshfile, recipe, field_geo, center, px, py)
+        check_reused_mesh(meshfile, recipe, field_geo, center, px, py; bot_PEC)
     else
         genmesh(field_geo, meshfile; per_x=px, per_y=py,structured_xy=shape,
                 center_xy=center, mirror_curves=true)
@@ -88,7 +88,8 @@ mesh_recipe_path(meshfile) = meshfile * ".recipe"
 "The genmesh inputs that define an angular-cell mesh, as strings."
 function angular_mesh_recipe(field_geo::SymmetricGeometry, px, py, shape, center)
     recipe = Dict{String,String}(
-        "recipe" => "angular-cell-2",
+        # 3: the bottom plane's curves and points are tagged BottomZ (PEC closure).
+        "recipe" => "angular-cell-3",
         "per_x" => string(px), "per_y" => string(py), "mirror_curves" => "true",
         "structured" => shape === nothing ? "none" : "$(shape[1])x$(shape[2])",
         "center_x" => repr(Float64(center[1])), "center_y" => repr(Float64(center[2])))
@@ -122,7 +123,10 @@ function read_mesh_recipe(path)
     return recipe
 end
 
-"Node extents of a mesh file and whether it tags curves on the mirror walls (genmesh mirror_curves)."
+"""
+Node extents of a mesh file, whether it tags curves on the mirror walls (genmesh
+mirror_curves) and whether it tags the bottom plane's curves BottomZ (the PEC closure).
+"""
 function mesh_extents_and_wall_curves(meshfile)
     gmsh.initialize()
     try
@@ -133,13 +137,13 @@ function mesh_extents_and_wall_curves(meshfile)
         xyz = reshape(coord, 3, :)
         lo, hi = vec(minimum(xyz; dims=2)), vec(maximum(xyz; dims=2))
         names = [gmsh.model.getPhysicalName(1, tag) for (_, tag) in gmsh.model.getPhysicalGroups(1)]
-        return lo, hi, any(in(("FacesX", "FacesY")), names)
+        return lo, hi, any(in(("FacesX", "FacesY")), names), "BottomZ" in names
     finally
         gmsh.finalize()
     end
 end
 
-function check_reused_mesh(meshfile, expected, field_geo, center, px, py)
+function check_reused_mesh(meshfile, expected, field_geo, center, px, py; bot_PEC::Bool=false)
     path = mesh_recipe_path(meshfile)
     if isfile(path)
         found = read_mesh_recipe(path)
@@ -153,28 +157,38 @@ function check_reused_mesh(meshfile, expected, field_geo, center, px, py)
         isempty(bad) || throw(ArgumentError("build_angular_simulation: reuse_mesh recipe $path does not match this geometry and cell: " * join(bad, ", ")))
         get(found, "mesh_sha256", "missing") == mesh_digest(meshfile) ||
             throw(ArgumentError("build_angular_simulation: $meshfile is not the mesh its recipe $path was written for (SHA-256 differs); regenerate it"))
-        check_mesh_content(meshfile, field_geo, center, px, py) ||
+        has_curves, has_bottom = check_mesh_content(meshfile, field_geo, center, px, py)
+        has_curves ||
             throw(ArgumentError("build_angular_simulation: $meshfile has no mirror-wall curve tags, but its recipe says mirror_curves = true"))
+        bot_PEC && !has_bottom && throw(ArgumentError(no_bottom_closure(meshfile)))
         return nothing
     end
     # No recipe: a mesh from before recipes existed. Check what the mesh itself shows.
-    has_curves = check_mesh_content(meshfile, field_geo, center, px, py)
+    has_curves, has_bottom = check_mesh_content(meshfile, field_geo, center, px, py)
+    bot_PEC && !has_bottom && throw(ArgumentError(no_bottom_closure(meshfile)))
     @warn "build_angular_simulation: reusing $meshfile without a recipe; checked its extents and periodic links only"
     has_curves || @warn "build_angular_simulation: $meshfile has no mirror-wall curve tags (generated before mirror_curves); a PEC mirror leaves the tangential degrees of freedom on the wall curves free"
     return nothing
 end
 
-"Check a mesh file's node extents and periodic axes against the cell; return whether it tags the mirror-wall curves."
+no_bottom_closure(meshfile) = "build_angular_simulation: $meshfile does not tag the bottom plane's curves BottomZ " *
+    "(generated before the PEC closure), so a PEC bottom would leave the tangential degrees of freedom on its " *
+    "perimeter free; regenerate it"
+
+"""
+Check a mesh file's node extents and periodic axes against the cell; return whether it tags
+the mirror-wall curves and whether it tags the bottom plane's curves BottomZ.
+"""
 function check_mesh_content(meshfile, field_geo, center, px, py)
     height = field_geo.hair + field_geo.hd + field_geo.hsub
     want_lo = [center[1] - field_geo.L / 2, center[2] - field_geo.W / 2, -height / 2]
     want_hi = [center[1] + field_geo.L / 2, center[2] + field_geo.W / 2, height / 2]
-    lo, hi, has_curves = mesh_extents_and_wall_curves(meshfile)
+    lo, hi, has_curves, has_bottom = mesh_extents_and_wall_curves(meshfile)
     (isapprox(lo, want_lo; atol=1e-6) && isapprox(hi, want_hi; atol=1e-6)) ||
         throw(ArgumentError("build_angular_simulation: reused mesh $meshfile spans $lo to $hi, expected $want_lo to $want_hi"))
     mesh_periodic_axes(meshfile) == (px, py) ||
         throw(ArgumentError("build_angular_simulation: reused mesh $meshfile has periodic axes $(mesh_periodic_axes(meshfile)), expected ($px, $py)"))
-    return has_curves
+    return has_curves, has_bottom
 end
 
 """
