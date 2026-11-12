@@ -50,25 +50,25 @@ terms. The surface measure is independently configurable; see [surface objective
 
 ## Standalone library and checkpoints
 
-Build [NLopt-MMA-CCSA](https://github.com/ianmatthewhammond/NLopt-MMA-CCSA) with support for
-`NLOPT_LD_MMA` in its dual solver and the committed-checkpoint callback arguments of
-`mma_minimize`/`ccsa_quadratic_minimize`. Set `JULIA_NLOPT_MMACCSA_LIB` to the resulting shared
-library. Merely finding a library file does not establish ABI compatibility. The wrapper
+Build [NLopt-MMA-CCSA](https://github.com/ianmatthewhammond/NLopt-MMA-CCSA) v0.1.0 or later,
+which provides `NLOPT_LD_MMA` in its dual solver and the committed-checkpoint callback arguments
+of `mma_minimize`/`ccsa_quadratic_minimize`. Set `JULIA_NLOPT_MMACCSA_LIB` to the resulting
+shared library. Merely finding a library file does not establish ABI compatibility. The wrapper
 probes dual-solver support and refuses older builds that reject the default `dual_algorithm=:mma`.
 `dual_algorithm=:lbfgs` explicitly selects the older dual solver and still requires the callback ABI.
 The NLopt backend does not need this shared library.
 
 ```sh
-git clone --branch public/portable-parity-paths https://github.com/ianmatthewhammond/NLopt-MMA-CCSA.git
+git clone --branch v0.1.0 https://github.com/ianmatthewhammond/NLopt-MMA-CCSA.git
 cmake -S NLopt-MMA-CCSA -B NLopt-MMA-CCSA/build
 cmake --build NLopt-MMA-CCSA/build
 export JULIA_NLOPT_MMACCSA_LIB="$PWD/NLopt-MMA-CCSA/build/libmmaccsa.dylib"
 # On Linux, use libmmaccsa.so instead.
 ```
 
-The build commands select the parity-portable branch, which includes the MMA dual and
-committed callback implementation. A release or main branch containing the same features
-can also be used.
+The tests that need this library (the standalone backend, epigraph and state-header tests) are
+skipped when it is not found, and run when `JULIA_NLOPT_MMACCSA_LIB` points at a v0.1.0 or
+later build.
 
 An explicit library path is authoritative: a missing file produces a build/setup error
 instead of falling back to another checkout. Without an explicit path, the wrapper also

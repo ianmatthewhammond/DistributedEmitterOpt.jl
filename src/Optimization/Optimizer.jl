@@ -111,6 +111,8 @@ function _checkpoint_metadata(data)
             epigraph_config=nothing,
             epigraph_tau=nothing,
             epigraph_T=nothing,
+            g_norm=nothing,
+            constraint_scale=nothing,
         )
     end
 
@@ -141,6 +143,10 @@ function _checkpoint_metadata(data)
         epigraph_config=_checkpoint_epigraph_config(data),
         epigraph_tau=_checkpoint_optional_float(data, "epigraph_tau"),
         epigraph_T=_checkpoint_optional_float(data, "epigraph_T"),
+        # Absent from checkpoints written before they were recorded: then the
+        # normalization is recomputed and the scale is not checked, as before.
+        g_norm=_checkpoint_optional_float(data, "g_norm"),
+        constraint_scale=_checkpoint_optional_float(data, "constraint_scale"),
     )
 end
 
@@ -155,7 +161,8 @@ function _validate_checkpoint_metadata!(metadata;
     robust_samples=nothing,
     robust_sharpness=nothing,
     robust_mode::Symbol=:ks,
-    epigraph_config=nothing)
+    epigraph_config=nothing,
+    constraint_scale=nothing)
 
     metadata.exact_resume || return nothing
 
@@ -171,6 +178,11 @@ function _validate_checkpoint_metadata!(metadata;
         throw(ArgumentError("Checkpoint $filepath was written with use_constraints=$(metadata.use_constraints), got use_constraints=$use_constraints"))
     robust_mode === :epigraph || metadata.constraint_tol_raw == constraint_tol_raw ||
         throw(ArgumentError("Checkpoint $filepath constraint_tol_raw does not match this resume call"))
+    # The CCSA state stores constraint values and gradients in scaled units, so a resume
+    # under another scale would mix the two. Checked when both sides record a scale.
+    (metadata.constraint_scale === nothing || constraint_scale === nothing ||
+     metadata.constraint_scale == constraint_scale) ||
+        throw(ArgumentError("Checkpoint $filepath was written with constraint_scale=$(metadata.constraint_scale), got constraint_scale=$constraint_scale"))
     sharp = _robust_sharpness_record(robust_samples, robust_mode, robust_sharpness)
     _same_robust_config(metadata.robust_samples, metadata.robust_sharpness, robust_samples, sharp;
                         ck_mode=metadata.robust_mode, mode=robust_mode,
@@ -219,6 +231,20 @@ end
 # Main entry point
 # ---------------------------------------------------------------------------
 
+"""Set epoch `epoch`'s projection β and, if scheduled, its loss α on `prob`."""
+function _set_epoch_state!(prob::OptimizationProblem, epoch::Int, β_schedule, α_schedule)
+    prob.control.β = β_schedule[epoch]
+    if !isnothing(α_schedule) && epoch <= length(α_schedule)
+        prob.pde = MaxwellProblem(
+            env=prob.pde.env,
+            inputs=prob.pde.inputs,
+            outputs=prob.pde.outputs,
+            α_loss=α_schedule[epoch]
+        )
+    end
+    return prob
+end
+
 """
     optimize!(prob; kwargs...) -> (g_opt, p_opt)
 
@@ -238,11 +264,9 @@ Keyword arguments:
   factor (default 1.0, no-op). A pure reparameterization: the feasible set is unchanged.
   Set large (e.g. 1e8) for constrained β=Inf epochs, where the raw constraint terms
   (~1e-6) are otherwise below one ULP of the objective inside the CCSA dual and the
-  dual line search fails (ret=-1). Known issues at constrained β=Inf, independent of
-  this fix: (1) `p_best` is objective-only selection, so under an active length-scale
-  constraint it systematically picks the most constraint-violating design in the
-  trajectory — prefer the final iterate; (2) each epoch resets CCSA ρ and σ to
-  defaults, discarding the previous epoch's learned trust-region state.
+  dual line search fails (ret=-1). Known issue at constrained β=Inf, independent of
+  this fix: each epoch resets CCSA ρ and σ to defaults, discarding the previous
+  epoch's learned trust-region state.
 - `constraint_tol_raw` -- absolute tolerance on each plain-path linewidth constraint
   M - b1 (default 1e-8, preserving legacy behavior). For an EPS-relative tolerance
   use e.g. 0.01 * prob.control.b1. Multiplied by constraint_scale in the standalone
@@ -253,6 +277,8 @@ Keyword arguments:
   The choice is not stored in the checkpoint; a run may resume under either solver.
 - `robust_samples` -- `nothing`, or a vector of (slope, z0) sidewall samples to take the
   worst case over
+- `robust_sharpness` -- KS sharpness, relative to the flat-substrate normalization
+  (default 200); must be > 0, and `Inf` takes the exact minimum
 - `robust_mode` -- how the worst case is aggregated: `:ks` (default; KS softmin with
   `robust_sharpness`, fixed scale g_norm) or `:epigraph` (standalone backends only; one
   constraint per sample, see `EpigraphSidewall.jl` and `_run_epoch_standalone_epigraph!`)
@@ -260,6 +286,21 @@ Keyword arguments:
 - `epigraph_tol` -- CCSA tolerance of the epigraph constraints τ − gᵢ/(g_norm T) ≤ 0
 - `epigraph_linewidth_tol` -- tolerance of the NORMALIZED linewidth constraints
   M/ε − 1 ≤ 0 in epigraph mode (requires `constraint_scale == 1/b1`)
+- `on_infeasible` -- what to do when `use_constraints` is set and the returned design
+  violates a linewidth constraint beyond its tolerance: `:warn` (default; log a warning
+  with both constraint values and return the design) or `:error` (throw). Either way the
+  design is already in `prob.p` and, with `backup`, in the final checkpoint.
+
+Returns the final accepted design of the last epoch and its normalized objective, not
+the best objective seen (`prob.g_best`/`prob.p_best`, which can come from an earlier β
+or an infeasible trial). With `use_constraints`, both linewidth constraints are
+re-evaluated at the returned design after the last epoch (`linewidth_feasibility`); a
+CCSA return does not by itself guarantee feasibility, e.g. after `max_iter` runs out.
+
+Checkpoints store the accepted design's objective, the flat-substrate normalization and,
+for standalone runs with constraints, `constraint_scale`. An exact resume reuses the
+stored normalization and refuses a different `constraint_scale`; resuming a checkpoint
+whose epochs are all complete restores the last epoch's β and loss before returning.
 """
 function optimize!(prob::OptimizationProblem;
     max_iter::Int=40,
@@ -287,7 +328,8 @@ function optimize!(prob::OptimizationProblem;
     robust_mode::Symbol=:ks,
     epigraph_sigma::Float64=1.0,
     epigraph_tol::Float64=1e-8,
-    epigraph_linewidth_tol::Float64=1e-3)
+    epigraph_linewidth_tol::Float64=1e-3,
+    on_infeasible::Symbol=:warn)
     backend in (:nlopt, :standalone_mma, :standalone_ccsaq) ||
         throw(ArgumentError("backend must be :nlopt, :standalone_mma, or :standalone_ccsaq (got :$backend)"))
     robust_mode in (:ks, :epigraph) ||
@@ -296,6 +338,12 @@ function optimize!(prob::OptimizationProblem;
         throw(ArgumentError("dual_algorithm must be :mma or :lbfgs (got :$dual_algorithm)"))
     (isfinite(constraint_tol_raw) && constraint_tol_raw >= 0) ||
         throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
+    if robust_samples !== nothing && robust_mode === :ks
+        (robust_sharpness > 0 && !isnan(robust_sharpness)) ||
+            throw(ArgumentError("robust_sharpness must be > 0 (Inf for the exact minimum), got $robust_sharpness"))
+    end
+    on_infeasible in (:warn, :error) ||
+        throw(ArgumentError("on_infeasible must be :warn or :error (got :$on_infeasible)"))
     if robust_mode === :epigraph
         constraint_tol_raw == 1e-8 ||
             throw(ArgumentError("epigraph mode uses epigraph_linewidth_tol, not constraint_tol_raw"))
@@ -305,6 +353,11 @@ function optimize!(prob::OptimizationProblem;
             throw(ArgumentError("robust_mode=:epigraph requires robust_samples"))
         (isfinite(epigraph_sigma) && epigraph_sigma > 0) ||
             throw(ArgumentError("epigraph_sigma must be finite and > 0 (got $epigraph_sigma)"))
+    end
+    if robust_samples !== nothing && prob.foundry_mode &&
+       prob.control.foundry_projection_mode === :legacy
+        throw(ArgumentError("robust_samples need foundry_projection_mode=:current; " *
+            ":legacy projects on the 2D grid, which has no sidewall model"))
     end
     epigraph_config = _epigraph_config(robust_mode, epigraph_tol, epigraph_sigma,
                                        prob.control.b1, epigraph_linewidth_tol)
@@ -320,8 +373,24 @@ function optimize!(prob::OptimizationProblem;
             g_opt = prob.g
         end
 
-        g_norm = flat_substrate_norm(prob)
-        log_info(:objective, "Flat-substrate normalization baseline"; g_norm)
+        # An exact resume reuses the run's normalization: the stored CCSA state, the KS
+        # scale and the epigraph T were all built with it, and recomputing it from a
+        # problem whose loss the α schedule has since changed gives another value.
+        g_norm = if resume_metadata !== nothing && resume_metadata.exact_resume &&
+                    resume_metadata.g_norm !== nothing
+            log_info(:objective, "Flat-substrate normalization baseline (from checkpoint)";
+                g_norm=resume_metadata.g_norm)
+            resume_metadata.g_norm
+        else
+            # The flat evaluation overwrites prob.g; keep the loaded design's objective.
+            g_loaded = prob.g
+            gn = flat_substrate_norm(prob)
+            prob.g = g_loaded
+            log_info(:objective, "Flat-substrate normalization baseline"; g_norm=gn)
+            gn
+        end
+        # What the CCSA state was built with: no scale on NLopt or without constraints.
+        effective_scale = (use_constraints && backend !== :nlopt) ? constraint_scale : nothing
 
         # Initialize history
         if empty_history && isnothing(resume_from)
@@ -348,7 +417,8 @@ function optimize!(prob::OptimizationProblem;
                 robust_samples,
                 robust_sharpness,
                 robust_mode,
-                epigraph_config)
+                epigraph_config,
+                constraint_scale=effective_scale)
             progress = _checkpoint_resume_progress(resume_metadata, prob.iteration, max_iter, length(β_schedule))
             start_epoch = progress.start_epoch
             resume_epoch_evals = progress.epoch_evals_start
@@ -367,6 +437,11 @@ function optimize!(prob::OptimizationProblem;
                     start_epoch, total_iterations=prob.iteration)
             end
         end
+        if start_epoch > length(β_schedule)
+            # Every epoch is done, so the loop below sets nothing. Restore the last epoch's
+            # β and loss, the state the returned design was produced and is checked under.
+            _set_epoch_state!(prob, length(β_schedule), β_schedule, α_schedule)
+        end
         if start_epoch > 1 && start_epoch <= length(β_schedule)
             log_info(:epoch, "Resuming: skipping $(start_epoch - 1) completed epoch(s)";
                 start_epoch, total_iterations=prob.iteration)
@@ -381,16 +456,7 @@ function optimize!(prob::OptimizationProblem;
                 free_mem_mb=Sys.free_memory() / 2^20,
                 prob_size_mb=sizeof(prob) * 1e-6)
 
-            prob.control.β = β
-
-            if !isnothing(α_schedule) && epoch <= length(α_schedule)
-                prob.pde = MaxwellProblem(
-                    env=prob.pde.env,
-                    inputs=prob.pde.inputs,
-                    outputs=prob.pde.outputs,
-                    α_loss=α_schedule[epoch]
-                )
-            end
+            _set_epoch_state!(prob, epoch, β_schedule, α_schedule)
 
             epoch_use_constraints = use_constraints && (epoch == length(β_schedule))
             epoch_evals_start = epoch == start_epoch ? resume_epoch_evals : 0
@@ -442,7 +508,9 @@ function optimize!(prob::OptimizationProblem;
                     robust_samples,
                     robust_sharpness=_robust_sharpness_record(robust_samples, robust_mode, robust_sharpness),
                     robust_mode,
-                    epigraph_config)
+                    epigraph_config,
+                    g_norm,
+                    constraint_scale=effective_scale)
             end
         end
 
@@ -460,17 +528,62 @@ function optimize!(prob::OptimizationProblem;
                 robust_samples,
                 robust_sharpness=_robust_sharpness_record(robust_samples, robust_mode, robust_sharpness),
                 robust_mode,
-                epigraph_config)
+                epigraph_config,
+                g_norm,
+                constraint_scale=effective_scale)
         end
 
-        # Return the best design seen across all epochs, not the last iterate
+        # Return the final accepted design, which matches prob.p and the checkpoint. The
+        # best objective seen (prob.g_best/prob.p_best) can come from an earlier beta or an
+        # infeasible trial, so it is never returned in its place.
         if prob.g_best > g_opt
-            log_info(:objective, "Returning best design (g_best > g_final)";
+            log_info(:objective, "Best objective seen exceeds the final design's; returning the final design (prob.p_best keeps the other)";
                 g_best=prob.g_best, g_final=g_opt)
-            return prob.g_best, copy(prob.p_best)
+        end
+        # The last epoch's constraints were active, but the backend's accepted point is not
+        # guaranteed feasible (an evaluation limit can stop CCSA before it gets there).
+        # Check the design actually returned, in raw units M - b1 against the tolerance
+        # the backend was given.
+        if use_constraints
+            raw_tol = robust_mode === :epigraph ?
+                epigraph_linewidth_tol * prob.control.b1 : constraint_tol_raw
+            fc = linewidth_feasibility(prob, p_opt; tol=raw_tol)
+            if fc.feasible
+                log_info(:constraints, "returned design satisfies the linewidth constraints";
+                    solid=fc.solid, void=fc.void, tol=fc.tol, β=prob.control.β)
+            else
+                msg = "returned design violates the linewidth constraints at β=$(prob.control.β): " *
+                      "solid M-b1=$(fc.solid), void M-b1=$(fc.void), tolerance $(fc.tol). " *
+                      "It is in prob.p (and the final checkpoint with backup=true); " *
+                      "more iterations in the last epoch or a larger constraint_scale may reach feasibility."
+                on_infeasible === :error && throw(ErrorException(msg))
+                log_warn(:constraints, msg; solid=fc.solid, void=fc.void, tol=fc.tol, β=prob.control.β)
+            end
         end
         return g_opt, p_opt
     end
+end
+
+"""
+    linewidth_feasibility(prob, p; tol) -> (; solid, void, tol, feasible)
+
+Evaluate both linewidth constraints at design `p` under the current `prob.control`
+(including β), in raw units M - b1, without gradients. `feasible` is true when both
+are finite and at most `tol`, the same test CCSA applies to a constraint with that
+tolerance.
+"""
+function linewidth_feasibility(prob::OptimizationProblem, p::Vector{Float64}; tol::Float64)
+    nograd = Float64[]
+    sim0 = default_sim(prob.sim)
+    solid, void = if prob.foundry_mode
+        (glc_solid(p, nograd; sim=sim0, control=prob.control),
+         glc_void(p, nograd; sim=sim0, control=prob.control))
+    else
+        obj = (; sim=sim0, control=prob.control, cache_pump=default_pool(prob.pool).filter_cache)
+        (glc_solid_fe(p, nograd, obj), glc_void_fe(p, nograd, obj))
+    end
+    feasible = isfinite(solid) && isfinite(void) && solid <= tol && void <= tol
+    return (; solid=Float64(solid), void=Float64(void), tol, feasible)
 end
 
 # ---------------------------------------------------------------------------
@@ -514,7 +627,13 @@ end
 # Single epoch
 # ---------------------------------------------------------------------------
 
-"""Run one epoch of optimization at fixed beta."""
+"""
+    run_epoch!(prob, max_iter, use_constraints, tol; kwargs...) -> (g_opt, p_opt, grad)
+
+Run one epoch of optimization at fixed beta. `p_opt` is the optimizer's accepted design
+and `g_opt` its objective. `grad` is the gradient at the last evaluated point, which
+need not be `p_opt`.
+"""
 function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::Bool, tol::Float64;
     g_norm::Float64=1.0,
     backup::Bool=false,
@@ -658,7 +777,8 @@ function _run_epoch_nlopt!(prob::OptimizationProblem, max_iter::Int, use_constra
         epoch_evals[] += 1
         checkpoint_metadata = _iteration_checkpoint_metadata(epoch, epoch_evals[],
             epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw)
+            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw,
+            g_norm)
         log_iteration!(prob, g, p; backup, backup_every, backup_path, checkpoint_metadata)
 
         return g
@@ -761,7 +881,8 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
 
             checkpoint_metadata = _iteration_checkpoint_metadata(epoch, total_epoch_evals,
                 epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-                checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw)
+                checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw,
+                g_norm, constraint_scale=use_constraints ? constraint_scale : nothing)
             if checkpoint_metadata === nothing
                 save_checkpoint(prob, backup_path)
             else
@@ -839,7 +960,8 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
         epoch_evals[] += 1
         checkpoint_metadata = _iteration_checkpoint_metadata(epoch, epoch_evals[],
             epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
-            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw)
+            checkpoint_backend, checkpoint_use_constraints, robust_samples, robust_sharpness; constraint_tol_raw,
+            g_norm, constraint_scale=use_constraints ? constraint_scale : nothing)
         log_iteration!(prob, g, p; backup=false, backup_every, backup_path, checkpoint_metadata)
 
         return -g   # standalone minimizes
@@ -876,13 +998,15 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
     lb = zeros(Float64, np)
     ub = ones(Float64, np)
 
-    ret, _, _ = MmaccsaBackend.minimize!(algorithm, objective, p_opt;
+    ret, fmin, _ = MmaccsaBackend.minimize!(algorithm, objective, p_opt;
         lb=lb, ub=ub, maxeval=max_iter, ftol_rel=tol, state=state,
         constraints=constraints,
         checkpoint_callback=safe_checkpoint,
         rho_init=rho_init, sigma_init=sigma_init, verbose=ccsa_verbose, dual_algorithm)
 
-    g_opt = prob.g   # in DEO's max convention (set inside the callback)
+    # The backend's accepted point and its objective, in DEO's max convention. prob.g
+    # holds the last callback's value, which can be a rejected inner trial.
+    g_opt = -fmin
 
     free_state!(state)
 
@@ -1002,7 +1126,8 @@ function _run_epoch_standalone_epigraph!(prob::OptimizationProblem, max_iter::In
     epigraph_md(evals, τ) = _iteration_checkpoint_metadata(epoch, evals,
         epoch_max_iter, checkpoint_beta_schedule, checkpoint_alpha_schedule,
         checkpoint_backend, checkpoint_use_constraints, robust_samples, nothing;
-        robust_mode=:epigraph, epigraph_config, epigraph_tau=τ, epigraph_T=T)
+        robust_mode=:epigraph, epigraph_config, epigraph_tau=τ, epigraph_T=T,
+        g_norm, constraint_scale=use_constraints ? constraint_scale : nothing)
 
     safe_checkpoint = function (x_committed, minf, local_nevals, k)
         backup || return nothing
@@ -1198,7 +1323,9 @@ function _iteration_checkpoint_metadata(epoch::Int, epoch_evals::Int, max_iter::
     robust_mode::Symbol=:ks,
     epigraph_config=nothing,
     epigraph_tau=nothing,
-    epigraph_T=nothing)
+    epigraph_T=nothing,
+    g_norm=nothing,
+    constraint_scale=nothing)
 
     if epoch <= 0 || beta_schedule === nothing || backend === nothing || use_constraints === nothing
         return nothing
@@ -1219,6 +1346,8 @@ function _iteration_checkpoint_metadata(epoch::Int, epoch_evals::Int, max_iter::
         epigraph_config,
         epigraph_tau,
         epigraph_T,
+        g_norm,
+        constraint_scale,
     )
 end
 
@@ -1274,7 +1403,9 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
     robust_mode::Symbol=:ks,
     epigraph_config=nothing,
     epigraph_tau=nothing,
-    epigraph_T=nothing)
+    epigraph_T=nothing,
+    g_norm=nothing,
+    constraint_scale=nothing)
 
     metadata = (current_epoch, epoch_evals, max_iter, beta_schedule, backend, use_constraints)
     has_metadata = all(x -> x !== nothing, metadata)
@@ -1289,6 +1420,8 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
     mkpath(prob.root)
     data = Dict{String,Any}(
         "p" => copy(prob.p),
+        # The objective of the design in "p". g_history[end] can be a rejected trial.
+        "g" => prob.g,
         "p_best" => copy(prob.p_best),
         "g_best" => prob.g_best,
         "g_history" => copy(prob.g_history),
@@ -1317,6 +1450,10 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
         # T. Needed to rebuild x bit-identically on a mid-epoch resume.
         epigraph_tau === nothing || (data["epigraph_tau"] = Float64(epigraph_tau))
         epigraph_T === nothing || (data["epigraph_T"] = Float64(epigraph_T))
+        # The run's objective normalization and constraint scale: both are baked into the
+        # stored CCSA state, so a resume reuses the first and checks the second.
+        g_norm === nothing || (data["g_norm"] = Float64(g_norm))
+        constraint_scale === nothing || (data["constraint_scale"] = Float64(constraint_scale))
         if mma_state_path !== nothing
             data["mma_state_path"] = mma_state_path
         end
@@ -1345,7 +1482,8 @@ function resume_from_checkpoint!(prob::OptimizationProblem, filepath::String; re
     prob.p .= p_loaded
     prob.g_history = Float64.(vec(data["g_history"]))
     prob.iteration = length(prob.g_history)
-    prob.g = isempty(prob.g_history) ? 0.0 : prob.g_history[end]
+    prob.g = haskey(data, "g") ? Float64(data["g"]) :
+             (isempty(prob.g_history) ? 0.0 : prob.g_history[end])
 
     # Restore best-design tracking (backwards-compatible with old checkpoints)
     if haskey(data, "p_best") && haskey(data, "g_best")
