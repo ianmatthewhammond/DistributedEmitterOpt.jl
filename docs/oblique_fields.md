@@ -102,7 +102,10 @@ For the specular order in medium ε, q=sqrt(k0²ε−|k_parallel|²), with the o
 branch for exp(+iωt). Tangential admittance is q for TE and k0²ε/q for TM. The
 implemented tensor is Y=q I_t+k_parallel k_parallelᵀ/q; normal electric field
 is excluded from this surface term. A sheet source iY·E_t produces a downward
-incident electric-field amplitude of 1/2, matching the old normal convention.
+incident electric-field amplitude of 1/2. In air that matches the old normal convention;
+in a fluid of index nf the old normal source gives 1/(2nf), so absolute fields differ by nf
+between the two formulations there (ratios to a flat reference under the same formulation
+do not).
 
 The old scalar k0 n cosθ is incorrect for refracted substrate waves and for TM
 even in air. For n=1.8 and θ=30°, q/k0=1.7292 versus 1.5588 from the old scalar;

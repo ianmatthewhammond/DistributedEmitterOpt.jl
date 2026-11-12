@@ -23,11 +23,22 @@ end
 # Convenience constructors
 # ═══════════════════════════════════════════════════════════════════════════════
 
+"""
+    incident_config(env, λ; θ=0, pol=:y)
+
+A field config for the convenience constructors. At θ = 0 it is the legacy normal-incidence
+config, as before. A tilted (Bloch) config measures its tilt in the fluid, so it carries the
+environment's fluid index at λ (which must be lossless).
+"""
+incident_config(env::Environment, λ::Real; θ::Real=0.0, pol::Symbol=:y) =
+    θ == 0 ? FieldConfig(λ, θ=θ, pol=pol) :
+             FieldConfig(λ; θ, pol, n_incident=real(resolve_index(env.mat_fluid, Float64(λ))))
+
 """Single-wavelength elastic scattering."""
 function MaxwellProblem(λ::Float64; θ::Float64=0.0, pol::Symbol=:y,
     mat_design::MaterialSpec="Ag", kwargs...)
     env = Environment(mat_design=mat_design)
-    MaxwellProblem(env=env, inputs=[FieldConfig(λ, θ=θ, pol=pol)]; kwargs...)
+    MaxwellProblem(env=env, inputs=[incident_config(env, λ; θ, pol)]; kwargs...)
 end
 
 """Pump/emission pair (inelastic)."""
@@ -37,8 +48,8 @@ function MaxwellProblem(λ_pump::Float64, λ_emission::Float64;
     env = Environment(mat_design=mat_design)
     MaxwellProblem(
         env=env,
-        inputs=[FieldConfig(λ_pump, θ=θ, pol=pol)],
-        outputs=[FieldConfig(λ_emission, θ=θ, pol=pol)];
+        inputs=[incident_config(env, λ_pump; θ, pol)],
+        outputs=[incident_config(env, λ_emission; θ, pol)];
         kwargs...
     )
 end

@@ -462,6 +462,17 @@ function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, pe
             end
             isempty(tags) || group(tt,dim,name,tags)
         end
+        # A PEC bottom constrains every tangential DOF on its plane, including the
+        # curves and points of its perimeter, which Gmsh also keeps as separate entities.
+        zb=gmsh.model.getBoundingBox(2,bot_bx.ps_u)[3]
+        for dim in (0,1)
+            tags=Int[]
+            for (_,tag) in gmsh.model.getEntities(dim)
+                box=gmsh.model.getBoundingBox(dim,tag)
+                abs(box[3]-zb)<1e-6 && abs(box[6]-zb)<1e-6 && push!(tags,tag)
+            end
+            isempty(tags) || group(tt,dim,"BottomZ",tags)
+        end
     end
     gmsh.model.mesh.generate(3)
     gmsh.write(meshfile)

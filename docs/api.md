@@ -6,11 +6,18 @@
 
 ```julia
 FieldConfig(λ; θ=0.0, pol=:y, weight=1.0)
+FieldConfig(λ; tilt_x=nothing, tilt_y=nothing, pol=:y, weight=1.0, n_incident=1.0, formulation=nothing)
 ```
 A single Maxwell solve configuration: wavelength, incidence angle, polarization, weight.
+Without tilt keywords and with θ = 0 it is the legacy normal-incidence solve. A nonzero θ, or
+any explicit `tilt_x`/`tilt_y`, selects the corrected general-angle (Bloch) formulation, whose
+tilts are measured in a lossless medium of index `n_incident` that must equal the fluid's.
+`collection_configs`, `rim_collection_samples` and `reduce_mirror_samples` build collection sets,
+and `build_angular_simulation` picks the quarter, half or full periodic cell they need. See
+`docs/oblique_fields.md`.
 
 ```julia
-Environment(; mat_design, mat_substrate=mat_design, mat_fluid=1.33)
+Environment(; mat_design, mat_substrate=mat_design, mat_fluid=sqrt(1.77), bot_PEC=false, pml=nothing)
 ```
 Material properties. Each material can be a string (looked up from `data/materials/*.txt`) or a numeric refractive index.
 
@@ -24,6 +31,8 @@ Convenience constructors:
 MaxwellProblem(λ; θ=0.0, pol=:y, mat_design="Ag")
 MaxwellProblem(λ_pump, λ_emission; θ=0.0, pol=:y, mat_design="Ag")
 ```
+With θ ≠ 0 these build tilted (Bloch) configs whose `n_incident` is the environment's fluid index
+at each wavelength; θ = 0 keeps the legacy normal-incidence configs.
 
 ```julia
 SERSObjective(; αₚ=I(3), volume=true, surface=false,
