@@ -1,19 +1,19 @@
 # Forward and adjoint solves on non-symmetric complex matrices for every solver backend that
 # loads. The adjoint must be the conjugate-transposed solve Aᴴ x = b: oblique Bloch operators
-# are not complex symmetric (A(κ)ᵀ = A(−κ)). A backend that cannot do that solve must refuse
-# rather than return conj(A⁻¹ conj b). Each factor serves a forward, an adjoint and a second
+# are not complex symmetric (A(κ)ᵀ = A(−κ)), and on these matrices the complex-symmetric
+# shortcut conj(A⁻¹ conj b) must miss it. Each factor serves a forward, an adjoint and a second
 # forward solve with distinct right-hand sides, before and after a refactorization: a backend
-# that keeps solver state can hand back a right-hand side unsolved. The storage and adjoint
-# decisions that live in src are checked whether or not the MUMPS and Pardiso extensions are
-# available.
+# that keeps solver state can hand back a right-hand side unsolved. The storage decisions that
+# live in src are checked whether or not the MUMPS and Pardiso extensions are available.
 using DistributedEmitterOpt, LinearAlgebra, SparseArrays, Random, Test
 const DEO = DistributedEmitterOpt
 
-# MUMPS.jl loads only when it is installed; GridapPardiso is used only if already loaded.
+# MUMPS.jl and Pardiso.jl load only when they are installed; Pardiso also needs MKL.
 if Base.find_package("MUMPS") !== nothing
     @eval using MUMPS
     MUMPS.MPI.Initialized() || MUMPS.MPI.Init()
 end
+Base.find_package("Pardiso") !== nothing && @eval import Pardiso
 
 relres(r, b) = norm(r) / norm(b)
 
@@ -34,24 +34,67 @@ end
     bB = randn(rng, ComplexF64, n)
     S = A + transpose(A)                       # complex symmetric
     mumps = Base.get_extension(DistributedEmitterOpt, :MUMPSExt) !== nothing
-    pardiso = Base.get_extension(DistributedEmitterOpt, :PardisoExt) !== nothing
+    pardiso = Base.get_extension(DistributedEmitterOpt, :PardisoExt) !== nothing && Pardiso.mkl_is_available()
     println("EXTENSIONS MUMPS=$mumps Pardiso=$pardiso")
 
     backends = Any[("UMFPACK", UmfpackSolver())]
     mumps && push!(backends, ("MUMPS", MUMPSSolver()))
+    pardiso && push!(backends, ("Pardiso", PardisoSolver()))
     for (name, s) in backends, (M, rhs) in ((A, b), (B, bB))
         @test norm(M - transpose(M)) > 1e-2 * norm(M)
         f = DEO.lu!(s, M)
         fwd = relres(M * DEO.solve!(s, f, rhs) - rhs, rhs)
         adj = relres(M' * DEO.solve_adjoint!(s, f, rhs) - rhs, rhs)
+        shortcut = relres(M' * conj(DEO.solve!(s, f, conj(rhs))) - rhs, rhs)
         seq = solve_sequence(s, f, M, rng)
         # Refactorization on the same sparsity pattern
         M2 = M + spdiagm(0 => fill(0.5 - 0.25im, size(M, 1)))
         f = DEO.lu!(s, f, M2)
         seq2 = solve_sequence(s, f, M2, rng)
-        println("BACKEND $name n=$(size(M, 1)) forward=$fwd adjoint=$adj sequence=$seq refactor sequence=$seq2")
+        println("BACKEND $name n=$(size(M, 1)) forward=$fwd adjoint=$adj sequence=$seq refactor sequence=$seq2 shortcut=$shortcut")
         @test max(fwd, adj, seq, seq2) < 1e-11
+        @test shortcut > 1e-2
         DEO.release_factor!(s, f)
+    end
+
+    if pardiso
+        s = PardisoSolver()
+        # The analysis is reused on the same pattern. A new pattern, also one made by changing
+        # the factorized matrix in place, gets a new analysis, and the old handle is released.
+        f = DEO.lu!(s, B)
+        @test DEO.lu!(s, f, B + spdiagm(0 => fill(0.5 - 0.25im, n))) === f
+        C = copy(B)
+        f = DEO.lu!(s, C)
+        i = findfirst(iszero, Vector(C[:, 1]))
+        @test i !== nothing
+        C[i, 1] = 0.3 - 0.1im                  # a new stored entry
+        g = DEO.lu!(s, f, C)
+        @test g !== f
+        @test_throws ArgumentError DEO.solve!(s, f, bB)
+        @test solve_sequence(s, g, C, rng) < 1e-11
+        DEO.release_factor!(s, g)
+        DEO.release_factor!(s, g)              # idempotent
+        @test_throws ArgumentError DEO.solve_adjoint!(s, g, bB)
+        h = DEO.lu!(s, g, B)                   # a released factor is rebuilt
+        @test h !== g
+        @test relres(B * DEO.solve!(s, h, bB) - bB, bB) < 1e-11
+        DEO.release_factor!(s, h)
+
+        # A complex symmetric matrix gets complex symmetric storage (mtype 6, one triangle) by
+        # default and when forced; a non-symmetric one gets mtype 13 unless 6 is forced.
+        # Z stores no diagonal at all, which the one-triangle storage must still carry.
+        Z = sparse([1, 2], [2, 1], ComplexF64[1 + 0.5im, 1 + 0.5im], 2, 2)
+        @test DEO.lu!(s, B).mtype == 13
+        @test DEO.lu!(PardisoSolver(assume_symmetric_maxwell=false), S).mtype == 13
+        for s6 in (PardisoSolver(), PardisoSolver(assume_symmetric_maxwell=true)),
+            M in (S, B + transpose(B), Z)
+            f = DEO.lu!(s6, M)
+            @test f.mtype == 6
+            @test solve_sequence(s6, f, M, rng) < 1e-11
+            DEO.release_factor!(s6, f)
+        end
+        @test_throws ArgumentError DEO.lu!(PardisoSolver(assume_symmetric_maxwell=true), B)
+        @test_throws ArgumentError DEO.lu!(PardisoSolver(mtype=4), sparse(ComplexF64[2 1+im; 1-im 3]))
     end
 
     # Real systems (the filter): the adjoint is the transposed solve.
@@ -67,6 +110,17 @@ end
         name == "UMFPACK" || continue
         f = DEO.lu!(s, R)
         @test relres(transpose(R) * DEO.solve_adjoint!(s, f, bR) - bR, bR) < 1e-11
+    end
+    if pardiso
+        for (mtype, M) in ((2, Rs + 30I), (11, R))
+            s = PardisoSolver(filter_mtype=mtype)
+            f = DEO.filter_lu!(s, M)
+            @test solve_sequence(s, f, M, rng) < 1e-11
+            @test DEO.filter_lu!(s, f, 2M) === f
+            @test solve_sequence(s, f, 2M, rng) < 1e-11
+            DEO.release_factor!(s, f)
+        end
+        @test_throws ArgumentError DEO.filter_lu!(PardisoSolver(), R)
     end
 
     if mumps
@@ -130,22 +184,32 @@ end
         @test vec(MUMPS.get_sol(m)) == b2
         MUMPS.finalize!(m)
     end
-    if pardiso
-        s = PardisoSolver()
-        f = DEO.lu!(s, A)
-        @test relres(A * DEO.solve!(s, f, b) - b, b) < 1e-11
-        @test_throws ArgumentError DEO.solve_adjoint!(s, f, b)
-        f = DEO.lu!(s, S)
-        @test relres(S' * DEO.solve_adjoint!(s, f, b) - b, b) < 1e-11
-    end
 
     # Decisions in src, independent of the extensions
-    @test DEO.pardiso_shortcut_adjoint_ok(S)
-    @test !DEO.pardiso_shortcut_adjoint_ok(A)
-    @test DEO.check_pardiso_adjoint(true) === nothing
-    @test_throws ArgumentError DEO.check_pardiso_adjoint(false)
+    @test DEO.symmetry_defect(B) ≈ norm(B - transpose(B)) / norm(B)   # also one-sided entries
+    @test DEO.symmetry_defect(S) == 0
+    @test DEO.symmetry_defect(Rs) == 0
+    # Scale-free: an unsymmetric matrix far below floating-point squares is still unsymmetric.
+    tiny = sparse(1e-200 .* ComplexF64[2 1; 0 2])
+    @test DEO.symmetry_defect(tiny) ≈ sqrt(2) / 3
+    @test DEO.symmetry_defect(1e200 * B) ≈ DEO.symmetry_defect(B)
+    @test DEO.checked_maxwell_mtype(PardisoSolver(), tiny) == 13
+    @test DEO.symmetry_defect(spzeros(ComplexF64, 3, 3)) == 0
+    @test DEO.checked_maxwell_mtype(PardisoSolver(), B + transpose(B)) == 6
+    @test DEO.checked_maxwell_mtype(PardisoSolver(), B) == 13
     @test DEO.checked_mumps_sym(false, A) == 0
     @test DEO.checked_mumps_sym(true, S) == 2
     @test_throws ArgumentError DEO.checked_mumps_sym(true, A)
+    @test DEO.checked_filter_mtype(PardisoSolver(), Rs) == -2
+    @test DEO.checked_filter_mtype(PardisoSolver(filter_mtype=11), R) == 11
+    @test_throws ArgumentError DEO.checked_filter_mtype(PardisoSolver(), R)
+    @test_throws ArgumentError DEO.checked_filter_mtype(PardisoSolver(filter_mtype=1), Rs)
+    @test DEO.checked_pardiso_iparm(DEO.legacy_pardiso_iparm()) == DEO.legacy_pardiso_iparm()
+    @test_throws ArgumentError DEO.checked_pardiso_iparm(zeros(Int, 63))
+    for (i, v) in ((1, 0), (6, 1), (28, 1), (35, 1))
+        iparm = DEO.legacy_pardiso_iparm()
+        iparm[i] = v
+        @test_throws ArgumentError DEO.checked_pardiso_iparm(iparm)
+    end
 end
-GC.gc()
+GC.gc()   # collected Pardiso handles run Pardiso.jl's finalizers, also after release_factor!
