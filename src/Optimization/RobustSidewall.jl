@@ -80,7 +80,12 @@ to set μ̃ (see the module docstring).
 """
 function ks_softmin(gs::AbstractVector{Float64}, sharpness::Float64;
                     scale::Float64=1.0)
-    if !isfinite(sharpness)
+    # Inf is the exact minimum. Anything else must be a positive number: a negative
+    # sharpness gives a soft MAXIMUM, zero divides by zero, and NaN would otherwise
+    # fall into the exact-minimum branch silently.
+    (sharpness > 0 && !isnan(sharpness)) ||
+        throw(ArgumentError("ks_softmin: sharpness must be > 0 (Inf for the exact minimum), got $sharpness"))
+    if sharpness == Inf
         w = zeros(length(gs))
         w[argmin(gs)] = 1.0
         return minimum(gs), w

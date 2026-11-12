@@ -66,6 +66,24 @@ function library_path()::String
     return _libpath[]
 end
 
+const _libhandle = Ref{Ptr{Cvoid}}(C_NULL)
+
+"""
+    _sym(name::Symbol) -> Ptr{Cvoid}
+
+Address of the C function `name` in the NLopt-MMA-CCSA library. Calls go through this
+address rather than `ccall(_sym(:name), ...)`: that tuple form names the
+library with a run-time call, which Julia 1.13 rejects when the method is compiled.
+The library is opened once and kept open, as the tuple form did implicitly, and symbols
+are looked up in that handle only, so NLopt.jl's own `nlopt_*` symbols are never picked up.
+"""
+function _sym(name::Symbol)::Ptr{Cvoid}
+    if _libhandle[] == C_NULL
+        _libhandle[] = Libdl.dlopen(library_path())
+    end
+    return Libdl.dlsym(_libhandle[], name)
+end
+
 function library_available()::Bool
     try
         library_path()
@@ -175,7 +193,7 @@ end
 
 function free_state!(st::MmaState)
     if st.ref[] != C_NULL
-        ccall((:mma_state_free, library_path()), Cvoid, (Ptr{Cvoid},), st.ref[])
+        ccall(_sym(:mma_state_free), Cvoid, (Ptr{Cvoid},), st.ref[])
         st.ref[] = C_NULL
     end
     return nothing
@@ -184,11 +202,11 @@ end
 function save_state(path::AbstractString, st::MmaState)
     st.ref[] == C_NULL && error("MmaState: nothing to save (state is null)")
     nbytes = Ref{Csize_t}(0)
-    ret = ccall((:mma_state_serialized_size, library_path()), Cint,
+    ret = ccall(_sym(:mma_state_serialized_size), Cint,
                 (Ptr{Cvoid}, Ref{Csize_t}), st.ref[], nbytes)
     ret < 0 && error("mma_state_serialized_size failed: $ret")
     bytes = Vector{UInt8}(undef, Int(nbytes[]))
-    ret = ccall((:mma_state_serialize, library_path()), Cint,
+    ret = ccall(_sym(:mma_state_serialize), Cint,
                 (Ptr{Cvoid}, Ptr{UInt8}, Csize_t),
                 st.ref[], bytes, nbytes[])
     ret < 0 && error("mma_state_serialize failed: $ret")
@@ -199,7 +217,7 @@ end
 function load_state(path::AbstractString)::MmaState
     bytes = read(path)
     st = MmaState()
-    ret = ccall((:mma_state_deserialize, library_path()), Cint,
+    ret = ccall(_sym(:mma_state_deserialize), Cint,
                 (Ptr{UInt8}, Csize_t, Ref{Ptr{Cvoid}}),
                 bytes, length(bytes), st.ref)
     ret < 0 && error("mma_state_deserialize failed: $ret")
@@ -287,20 +305,20 @@ function dual_algorithm_supported(dual_algorithm::Symbol)::Bool
     code = _dual_code(dual_algorithm)
     lib = library_path()
     return get!(_dual_support, (lib, dual_algorithm)) do
-        opt = ccall((:nlopt_create, library_path()), Ptr{Cvoid}, (Cint, Cuint), code, 1)
+        opt = ccall(_sym(:nlopt_create), Ptr{Cvoid}, (Cint, Cuint), code, 1)
         opt == C_NULL && error("nlopt_create failed in $lib")
         try
             f = @cfunction(_probe_dual_objective, Cdouble, (Cuint, Ptr{Cdouble}, Ptr{Cdouble}, Ptr{Cvoid}))
-            ccall((:nlopt_set_min_objective, library_path()), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), opt, f, C_NULL)
-            ccall((:nlopt_set_lower_bounds, library_path()), Cint, (Ptr{Cvoid}, Ptr{Cdouble}), opt, [-1.0])
-            ccall((:nlopt_set_upper_bounds, library_path()), Cint, (Ptr{Cvoid}, Ptr{Cdouble}), opt, [1.0])
+            ccall(_sym(:nlopt_set_min_objective), Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), opt, f, C_NULL)
+            ccall(_sym(:nlopt_set_lower_bounds), Cint, (Ptr{Cvoid}, Ptr{Cdouble}), opt, [-1.0])
+            ccall(_sym(:nlopt_set_upper_bounds), Cint, (Ptr{Cvoid}, Ptr{Cdouble}), opt, [1.0])
             x = [0.5]
             minf = Ref{Cdouble}(0.0)
-            ret = ccall((:nlopt_optimize_limited, library_path()), Cint,
+            ret = ccall(_sym(:nlopt_optimize_limited), Cint,
                         (Ptr{Cvoid}, Ptr{Cdouble}, Ref{Cdouble}, Cint, Cdouble), opt, x, minf, 50, 0.0)
             ret != NLOPT_INVALID_ARGS
         finally
-            ccall((:nlopt_destroy, library_path()), Cvoid, (Ptr{Cvoid},), opt)
+            ccall(_sym(:nlopt_destroy), Cvoid, (Ptr{Cvoid},), opt)
         end
     end
 end
@@ -384,7 +402,7 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
         C_NULL,
     ))
 
-    dual_opt = ccall((:nlopt_create, library_path()), Ptr{Cvoid},
+    dual_opt = ccall(_sym(:nlopt_create), Ptr{Cvoid},
                      (Cint, Cuint), dual_code, m)
 
     state_ref = state === nothing ? Ref{Ptr{Cvoid}}(C_NULL) : state.ref
@@ -402,7 +420,7 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
     ret = try
         GC.@preserve obj_box con_boxes con_tols nlopt_constraints lb ub p stop nevals force_stop sigma_buf checkpoint_box begin
             if algorithm === :mma
-                ccall((:mma_minimize, library_path()), Cint,
+                ccall(_sym(:mma_minimize), Cint,
                     (Cuint, Ptr{Cvoid}, Ptr{Cvoid},
                      Cuint, Ptr{nlopt_constraint},
                      Ptr{Cdouble}, Ptr{Cdouble},
@@ -418,7 +436,7 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
                     dual_opt, Cint(inner_maxeval), Cuint(verbose), rho_init,
                     sigma_ptr, state_ref, checkpoint_cfn, checkpoint_ptr)
             elseif algorithm === :ccsaq
-                ccall((:ccsa_quadratic_minimize, library_path()), Cint,
+                ccall(_sym(:ccsa_quadratic_minimize), Cint,
                     (Cuint, Ptr{Cvoid}, Ptr{Cvoid},
                      Cuint, Ptr{nlopt_constraint},
                      Ptr{Cvoid},
@@ -440,7 +458,7 @@ function minimize!(algorithm::Symbol, f::Function, p::Vector{Float64};
             end
         end
     finally
-        ccall((:nlopt_destroy, library_path()), Cvoid, (Ptr{Cvoid},), dual_opt)
+        ccall(_sym(:nlopt_destroy), Cvoid, (Ptr{Cvoid},), dual_opt)
     end
 
     if state !== nothing

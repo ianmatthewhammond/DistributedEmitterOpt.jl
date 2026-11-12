@@ -195,22 +195,36 @@ function edgepaddcti(arr::Matrix{Float64}, pad)
 end
 
 """
-    convolvedcti(x; h) -> Matrix
+    dcti_tiles(cell, kernel) -> (npx, npy)
+
+How many copies of a cell of size `cell` `convolvedcti` tiles along each axis so that a kernel of
+size `kernel` fits: the smallest odd count covering `2k - 1` nodes. An axis with one copy is filtered
+on the cell alone, with DCT-I's mirror walls. An axis with three or more is tiled periodically.
+"""
+function dcti_tiles(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int})
+    np = Int.(ceil.((2 .* kernel .- 1) ./ cell))
+    return map(n -> iseven(n) ? n + 1 : n, np)
+end
+
+"""
+    dcti_tiled(cell, kernel) -> (Bool, Bool)
+
+Whether `convolvedcti` tiles the cell along x and along y (see `dcti_tiles`).
+"""
+dcti_tiled(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int}) = dcti_tiles(cell, kernel) .> 1
+
+"""
+    convolvedcti(x; h, halo=false) -> Matrix
 
 Convolve x with kernel h using DCT-I (efficient for symmetric boundaries).
-"""
-function convolvedcti(x::Matrix{Float64}; h::Matrix{Float64})
-    sx, sy = size(x)
-    kx, ky = size(h)
 
-    npx = Int(ceil((2 * kx - 1) / sx))
-    npy = Int(ceil((2 * ky - 1) / sy))
-    if npx % 2 == 0
-        npx += 1
-    end
-    if npy % 2 == 0
-        npy += 1
-    end
+With `halo=true`, the result also keeps one node beyond each wall on every axis the cell is tiled
+along (`dcti_tiled`): the filtered field of the neighbouring copy, which mirror reflection does not
+reproduce there. Untiled axes are returned without a halo.
+"""
+function convolvedcti(x::Matrix{Float64}; h::Matrix{Float64}, halo::Bool=false)
+    sx, sy = size(x)
+    npx, npy = dcti_tiles((sx, sy), size(h))
 
     x = repeat(x, outer=(npx, npy))
     x = edgepaddcti(x, ((0, 0), (0, 0)))
@@ -218,7 +232,8 @@ function convolvedcti(x::Matrix{Float64}; h::Matrix{Float64})
 
     freq_filter = DCT_I(h)
     freq_filter = freq_filter ./ maximum(freq_filter)
-    xout = centeredfft(iDCT_I(DCT_I(x) .* freq_filter), (sx, sy))
+    out = halo ? (sx + 2 * (npx > 1), sy + 2 * (npy > 1)) : (sx, sy)
+    xout = centeredfft(iDCT_I(DCT_I(x) .* freq_filter), out)
     return xout
 end
 
@@ -229,16 +244,7 @@ Adjoint of DCT-I convolution with kernel h.
 """
 function convolvedcti_adjoint(x::Matrix{Float64}; h::Matrix{Float64})
     sx, sy = size(x)
-    kx, ky = size(h)
-
-    npx = Int(ceil((2 * kx - 1) / sx))
-    npy = Int(ceil((2 * ky - 1) / sy))
-    if npx % 2 == 0
-        npx += 1
-    end
-    if npy % 2 == 0
-        npy += 1
-    end
+    npx, npy = dcti_tiles((sx, sy), size(h))
 
     fullshape = (npx * sx, npy * sy)
     h = properpaddcti(h, fullshape)
