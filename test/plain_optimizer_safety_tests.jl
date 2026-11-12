@@ -24,7 +24,10 @@ mutable struct OptimizationProblem
     sim::Nothing
 end
 problem() = OptimizationProblem([0.4,0.6], 0.0, zeros(2), 0, Float64[], -Inf,
-    zeros(2), FakeControl(8.0,1e-6), (;env=(;logger_cfg=nothing)), "unused", false, nothing)
+    zeros(2), FakeControl(8.0,1e-6), (;env=(;logger_cfg=nothing), inputs=nothing, outputs=nothing, α_loss=0.0),
+    "unused", false, nothing)
+# The loss schedule rebuilds prob.pde; only α_loss matters here.
+MaxwellProblem(; env, inputs, outputs, α_loss) = (; env, inputs, outputs, α_loss)
 const checkpoints = NamedTuple[]
 const freed = Ref(0)
 const return_code = Ref(-1)
@@ -279,10 +282,11 @@ resume_md(; current_epoch, epoch_evals, g_norm=nothing) = (; exact_resume=true, 
     F.resume_state[] = (; p=[0.1, 0.1], g=0.01, iteration=10,
         metadata=resume_md(current_epoch=2, epoch_evals=5))   # no g_norm: the flat evaluation runs
     p = F.problem(); p.foundry_mode = true; empty!(F.warnings)
-    @test p.control.β == 8.0
+    @test p.control.β == 8.0 && p.pde.α_loss == 0.0
     g, design = F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
-        use_constraints=true, resume_from="injected", on_infeasible=:error)
+        α_schedule=[0.25, 0.5], use_constraints=true, resume_from="injected", on_infeasible=:error)
     @test p.control.β == Inf
+    @test p.pde.α_loss == 0.5
     @test isempty(F.warnings)
     @test design == [0.1, 0.1] && g == 0.01
     @test p.g == 0.01            # not the flat evaluation's 999
