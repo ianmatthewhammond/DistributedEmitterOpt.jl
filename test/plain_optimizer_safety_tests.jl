@@ -39,7 +39,8 @@ with_run_logger(f, config; kwargs...) = f()
 flat_substrate_norm(prob) = 2.0
 log_info(args...; kwargs...) = nothing
 log_debug(args...; kwargs...) = nothing
-log_warn(args...; kwargs...) = nothing
+const warnings = Any[]
+log_warn(args...; kwargs...) = (push!(warnings, (args, (;kwargs...))); nothing)
 next_iteration!(prob) = (prob.iteration += 1)
 function objective_and_gradient!(g, p, prob)
     g .= 2p
@@ -54,8 +55,19 @@ function log_iteration!(prob, g, p; kwargs...)
 end
 save_checkpoint(prob, path; kwargs...) = push!(checkpoints, (;kwargs...))
 default_sim(sim) = sim
-glc_solid(p,g; kwargs...) = (isempty(g) || (g .= 2.0); 0.2)
-glc_void(p,g; kwargs...) = (isempty(g) || (g .= -3.0); -0.3)
+# Constraint values: fixed by default; `final_values` overrides them for gradient-free
+# calls (the final feasibility check) so a test can set the returned design's values.
+const final_values = Ref{Any}(nothing)
+const gradfree_calls = Ref(0)
+function glc_solid(p,g; kwargs...)
+    isempty(g) || (g .= 2.0; return 0.2)
+    gradfree_calls[] += 1
+    return final_values[] === nothing ? 0.2 : final_values[][1]
+end
+function glc_void(p,g; kwargs...)
+    isempty(g) || (g .= -3.0; return -0.3)
+    return final_values[] === nothing ? -0.3 : final_values[][2]
+end
 
 module MmaccsaBackend
 using ..PlainOptimizerFixture: return_code
@@ -94,7 +106,7 @@ function load_optimizer(path)
             sig = sig isa Expr && sig.head == :where ? sig.args[1] : sig
             if sig isa Expr && sig.head == :call
                 name = sig.args[1]
-                if name in (:optimize!, :run_epoch!, :_run_epoch_standalone!) &&
+                if name in (:optimize!, :run_epoch!, :_run_epoch_standalone!, :linewidth_feasibility) &&
                    occursin("prob::OptimizationProblem", string(sig))
                     Core.eval(@__MODULE__, ex)
                     push!(loaded,name)
@@ -105,7 +117,7 @@ function load_optimizer(path)
         foreach(visit,ex.args)
     end
     visit(parsed)
-    loaded == Set([:optimize!,:run_epoch!,:_run_epoch_standalone!]) || error("missing production functions: $loaded")
+    loaded == Set([:optimize!,:run_epoch!,:_run_epoch_standalone!,:linewidth_feasibility]) || error("missing production functions: $loaded")
 end
 end
 
@@ -185,4 +197,57 @@ begin
         @test_throws ArgumentError F.optimize!(F.problem();backend=:standalone_mma,
             robust_mode=:epigraph, constraint_tol_raw=6e-14)
     end
+end
+
+@testset "the returned design's linewidth feasibility is checked and reported" begin
+    F.return_code[] = 5
+    run(; kwargs...) = begin
+        p = F.problem(); p.foundry_mode = true
+        empty!(F.warnings); F.gradfree_calls[] = 0
+        out = F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
+            use_constraints=true, constraint_tol_raw=1e-8, kwargs...)
+        (p, out)
+    end
+    # Feasible, including a value exactly at the tolerance: no warning, design returned.
+    for vals in ((-1e-3, -2e-3), (1e-8, -1.0))
+        F.final_values[] = vals
+        p, (g, design) = run()
+        @test F.gradfree_calls[] == 1
+        @test isempty(F.warnings)
+        @test design == p.p
+    end
+    # Infeasible: :warn (default) returns the design and logs both values; :error throws
+    # and leaves the design in prob.p.
+    for vals in ((2e-8, -1.0), (-1.0, 0.05), (NaN, -1.0))
+        F.final_values[] = vals
+        p, (g, design) = run()
+        @test design == p.p
+        @test length(F.warnings) == 1
+        w = F.warnings[1]
+        @test w[1][1] === :constraints && occursin("violates", w[1][2])
+        @test isequal(w[2].solid, vals[1]) && isequal(w[2].void, vals[2]) && w[2].tol == 1e-8
+        p2 = F.problem(); p2.foundry_mode = true
+        err = try
+            F.optimize!(p2; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
+                use_constraints=true, on_infeasible=:error)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ErrorException && occursin("violates the linewidth constraints at β=Inf", err.msg)
+        @test p2.p == [0.4, 0.6]   # the fixture backend leaves the start point accepted
+        @test p2.iteration == 10
+    end
+    # No constraints: nothing is evaluated or reported.
+    F.final_values[] = (1.0, 1.0)
+    p = F.problem(); p.foundry_mode = true; F.gradfree_calls[] = 0; empty!(F.warnings)
+    F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0], on_infeasible=:error)
+    @test F.gradfree_calls[] == 0 && isempty(F.warnings)
+    @test_throws ArgumentError F.optimize!(F.problem(); on_infeasible=:ignore)
+    # The helper itself, at the boundary and with an explicit tolerance.
+    F.final_values[] = (0.1, 0.1)
+    pf = F.problem(); pf.foundry_mode = true
+    @test F.linewidth_feasibility(pf, [0.5, 0.5]; tol=0.1).feasible
+    @test !F.linewidth_feasibility(pf, [0.5, 0.5]; tol=0.099).feasible
+    F.final_values[] = nothing
 end

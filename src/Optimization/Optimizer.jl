@@ -258,6 +258,16 @@ Keyword arguments:
 - `epigraph_tol` -- CCSA tolerance of the epigraph constraints τ − gᵢ/(g_norm T) ≤ 0
 - `epigraph_linewidth_tol` -- tolerance of the NORMALIZED linewidth constraints
   M/ε − 1 ≤ 0 in epigraph mode (requires `constraint_scale == 1/b1`)
+- `on_infeasible` -- what to do when `use_constraints` is set and the returned design
+  violates a linewidth constraint beyond its tolerance: `:warn` (default; log a warning
+  with both constraint values and return the design) or `:error` (throw). Either way the
+  design is already in `prob.p` and, with `backup`, in the final checkpoint.
+
+Returns the final accepted design of the last epoch and its normalized objective, not
+the best objective seen (`prob.g_best`/`prob.p_best`, which can come from an earlier β
+or an infeasible trial). With `use_constraints`, both linewidth constraints are
+re-evaluated at the returned design after the last epoch (`linewidth_feasibility`); a
+CCSA return does not by itself guarantee feasibility, e.g. after `max_iter` runs out.
 """
 function optimize!(prob::OptimizationProblem;
     max_iter::Int=40,
@@ -285,7 +295,8 @@ function optimize!(prob::OptimizationProblem;
     robust_mode::Symbol=:ks,
     epigraph_sigma::Float64=1.0,
     epigraph_tol::Float64=1e-8,
-    epigraph_linewidth_tol::Float64=1e-3)
+    epigraph_linewidth_tol::Float64=1e-3,
+    on_infeasible::Symbol=:warn)
     backend in (:nlopt, :standalone_mma, :standalone_ccsaq) ||
         throw(ArgumentError("backend must be :nlopt, :standalone_mma, or :standalone_ccsaq (got :$backend)"))
     robust_mode in (:ks, :epigraph) ||
@@ -294,6 +305,8 @@ function optimize!(prob::OptimizationProblem;
         throw(ArgumentError("dual_algorithm must be :mma or :lbfgs (got :$dual_algorithm)"))
     (isfinite(constraint_tol_raw) && constraint_tol_raw >= 0) ||
         throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
+    on_infeasible in (:warn, :error) ||
+        throw(ArgumentError("on_infeasible must be :warn or :error (got :$on_infeasible)"))
     if robust_mode === :epigraph
         constraint_tol_raw == 1e-8 ||
             throw(ArgumentError("epigraph mode uses epigraph_linewidth_tol, not constraint_tol_raw"))
@@ -466,15 +479,57 @@ function optimize!(prob::OptimizationProblem;
                 epigraph_config)
         end
 
-        # Return the final accepted design, the one that satisfies the last epoch's
-        # constraints and matches prob.p and the checkpoint. The best objective seen
-        # (prob.g_best/prob.p_best) can come from an earlier beta or an infeasible trial.
+        # Return the final accepted design, which matches prob.p and the checkpoint. The
+        # best objective seen (prob.g_best/prob.p_best) can come from an earlier beta or an
+        # infeasible trial, so it is never returned in its place.
         if prob.g_best > g_opt
             log_info(:objective, "Best objective seen exceeds the final design's; returning the final design (prob.p_best keeps the other)";
                 g_best=prob.g_best, g_final=g_opt)
         end
+        # The last epoch's constraints were active, but the backend's accepted point is not
+        # guaranteed feasible (an evaluation limit can stop CCSA before it gets there).
+        # Check the design actually returned, in raw units M - b1 against the tolerance
+        # the backend was given.
+        if use_constraints
+            raw_tol = robust_mode === :epigraph ?
+                epigraph_linewidth_tol * prob.control.b1 : constraint_tol_raw
+            fc = linewidth_feasibility(prob, p_opt; tol=raw_tol)
+            if fc.feasible
+                log_info(:constraints, "returned design satisfies the linewidth constraints";
+                    solid=fc.solid, void=fc.void, tol=fc.tol, β=prob.control.β)
+            else
+                msg = "returned design violates the linewidth constraints at β=$(prob.control.β): " *
+                      "solid M-b1=$(fc.solid), void M-b1=$(fc.void), tolerance $(fc.tol). " *
+                      "It is in prob.p (and the final checkpoint with backup=true); " *
+                      "more iterations in the last epoch or a larger constraint_scale may reach feasibility."
+                on_infeasible === :error && throw(ErrorException(msg))
+                log_warn(:constraints, msg; solid=fc.solid, void=fc.void, tol=fc.tol, β=prob.control.β)
+            end
+        end
         return g_opt, p_opt
     end
+end
+
+"""
+    linewidth_feasibility(prob, p; tol) -> (; solid, void, tol, feasible)
+
+Evaluate both linewidth constraints at design `p` under the current `prob.control`
+(including β), in raw units M - b1, without gradients. `feasible` is true when both
+are finite and at most `tol`, the same test CCSA applies to a constraint with that
+tolerance.
+"""
+function linewidth_feasibility(prob::OptimizationProblem, p::Vector{Float64}; tol::Float64)
+    nograd = Float64[]
+    sim0 = default_sim(prob.sim)
+    solid, void = if prob.foundry_mode
+        (glc_solid(p, nograd; sim=sim0, control=prob.control),
+         glc_void(p, nograd; sim=sim0, control=prob.control))
+    else
+        obj = (; sim=sim0, control=prob.control, cache_pump=default_pool(prob.pool).filter_cache)
+        (glc_solid_fe(p, nograd, obj), glc_void_fe(p, nograd, obj))
+    end
+    feasible = isfinite(solid) && isfinite(void) && solid <= tol && void <= tol
+    return (; solid=Float64(solid), void=Float64(void), tol, feasible)
 end
 
 # ---------------------------------------------------------------------------
