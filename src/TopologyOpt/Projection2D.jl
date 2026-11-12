@@ -102,8 +102,14 @@ end
     smoothed_projection_vec(pf_vec, control, sim) -> Vector
 
 Vector wrapper around 2D grid SSP used by legacy foundry mode.
+
+The grid SSP has no sidewall model, so a control with `use_sidewall` set is refused
+rather than silently evaluated as a vertical extrusion.
 """
 function smoothed_projection_vec(pf_vec::Vector{Float64}, control, sim)
+    control.use_sidewall && throw(ArgumentError(
+        "sidewalls need foundry_projection_mode=:current; :legacy projects on the 2D grid, " *
+        "which has no sidewall model"))
     nx, ny = length(sim.grid.x), length(sim.grid.y)
     pf = reshape(pf_vec, (nx, ny))
     return vec(smoothed_projection(pf, control, sim))

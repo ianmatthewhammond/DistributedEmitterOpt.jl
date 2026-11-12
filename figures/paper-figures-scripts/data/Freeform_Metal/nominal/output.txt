@@ -420,4 +420,4 @@ unknown function (ip: 0x7fd9a2ff7d8f)
 __libc_start_main at /lib/x86_64-linux-gnu/libc.so.6 (unknown line)
 unknown function (ip: 0x401098)
 Allocations: 1368578737 (Pool: 1368365320; Big: 213417); GC: 402
-/var/spool/slurmd/job547468/slurm_script: line 13: 1841877 Aborted                 OMP_NUM_THREADS=40 JULIA_NUM_THREADS=40 julia <legacy-home>/GitHub/Emitter3DTopOpt/src/include/SuperYaml.jl $1 1 0
+<batch-script>: line 13: <process> Aborted                 OMP_NUM_THREADS=40 JULIA_NUM_THREADS=40 julia <legacy-home>/GitHub/Emitter3DTopOpt/src/include/SuperYaml.jl $1 1 0
