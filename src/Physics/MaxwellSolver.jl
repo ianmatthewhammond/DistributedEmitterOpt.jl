@@ -177,7 +177,7 @@ end
 Solve adjoint Maxwell for each adjoint source.
 Reuses the LU factors already in the pool.
 """
-function solve_adjoint!(pde::MaxwellProblem, sources::Dict{CacheKey,Vector{ComplexF64}},
+function solve_adjoint!(pde::MaxwellProblem, sources::AbstractDict{<:CacheKey,Vector{ComplexF64}},
     sim, pool)
     adjoints = Dict{CacheKey,CellField}()
 
@@ -204,8 +204,8 @@ end
 Compute dg/dpf from the PDE term (lambda^T dA/dp E), summed over all field configs.
 """
 function pde_sensitivity(pde::MaxwellProblem,
-    fields::Dict{CacheKey,CellField},
-    adjoints::Dict{CacheKey,CellField},
+    fields::AbstractDict{<:CacheKey,<:CellField},
+    adjoints::AbstractDict{<:CacheKey,<:CellField},
     pf, pt, sim, control;
     space=default_sim(sim).Pf)
 
@@ -238,8 +238,8 @@ Compute dg/dpt from the PDE term (lambda^T dA/dpt E), summed over all configs.
 Used by legacy foundry smoothing mode where SSP lives on the 2D grid.
 """
 function pde_sensitivity_pt(pde::MaxwellProblem,
-    fields::Dict{CacheKey,CellField},
-    adjoints::Dict{CacheKey,CellField},
+    fields::AbstractDict{<:CacheKey,<:CellField},
+    adjoints::AbstractDict{<:CacheKey,<:CellField},
     pt, sim;
     space=default_sim(sim).Pf)
 
@@ -271,8 +271,8 @@ Legacy foundry accumulation of dg/dpt directly onto 2D grid DOFs via quadrature.
 """
 function pde_sensitivity_pt_grid!(out::Vector{Float64},
     pde::MaxwellProblem,
-    fields::Dict{CacheKey,CellField},
-    adjoints::Dict{CacheKey,CellField},
+    fields::AbstractDict{<:CacheKey,<:CellField},
+    adjoints::AbstractDict{<:CacheKey,<:CellField},
     pt, sim)
 
     fill!(out, 0.0)
