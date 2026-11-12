@@ -77,7 +77,7 @@ meta(; kw...) = (; current_epoch=2, epoch_evals=5, max_iter=5, beta_schedule=[8.
         # Written without the new keys (as before this change): objective from history,
         # normalization recomputed, scale unchecked.
         C.save_checkpoint(src, path; meta()...)
-        data = JLD2.load(path); delete!(data, "g"); JLD2.save(path, data)
+        data = C.JLD2.load(path); delete!(data, "g"); C.JLD2.save(path, data)
         dst2 = C.OptimizationProblem(zeros(2), 0.0, 0, Float64[], -Inf, zeros(2), dir)
         md2 = C.resume_from_checkpoint!(dst2, path; return_metadata=true)
         @test dst2.g == 0.81
