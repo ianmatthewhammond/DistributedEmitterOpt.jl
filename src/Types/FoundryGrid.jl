@@ -24,14 +24,24 @@ mutable struct FoundryGrid
     adj_ready::Bool
     legacy_jacobian::Union{Nothing,SparseMatrixCSC{Float64,Int}}
     legacy_ready::Bool
+    reflection_bounds::Union{Nothing,NTuple{4,Float64}}
 
     function FoundryGrid(x, y, params, nodes)
         nnodes = length(nodes)
         adj_idx = zeros(Int, 4, nnodes)
         adj_w = zeros(Float64, 4, nnodes)
-        new(x, y, params, nodes, adj_idx, adj_w, false, nothing, false)
+        new(x, y, params, nodes, adj_idx, adj_w, false, nothing, false, nothing)
     end
 end
+
+"Reflect a full/half field-cell point into the independent rectangular design patch."
+function design_point(r, bounds::NTuple{4,Float64})
+    a, b, c, d = bounds
+    fold(x, lo, hi) = lo + (hi-lo) - abs(mod(x-lo, 2*(hi-lo)) - (hi-lo))
+    VectorValue(fold(r[1],a,b), fold(r[2],c,d), r[3])
+end
+design_point(r, ::Nothing) = r
+design_point(r, grid::FoundryGrid) = design_point(r, grid.reflection_bounds)
 
 Base.show(io::IO, g::FoundryGrid) = print(io, "FoundryGrid($(length(g.x))×$(length(g.y)))")
 
@@ -190,7 +200,8 @@ function prepare_grid_adjoint!(grid::FoundryGrid)
     lin = LinearIndices((nx, ny))
 
     @inbounds for (i, node) in enumerate(grid.nodes)
-        x, y = node[1], node[2]
+        point = design_point(node, grid)
+        x, y = point[1], point[2]
 
         rx = searchsortedfirst(grid.x, x)
         ry = searchsortedfirst(grid.y, y)
@@ -319,9 +330,10 @@ function build_foundry_pf(pf_vec::Vector{Float64}, sim, control)
         # A value-keyed cache must observe the field belonging to each evaluation.
         params = copy(sim.grid.params)
         gridx, gridy = sim.grid.x, sim.grid.y
-        return (r -> pf_grid(r, params, gridx, gridy))
+        bounds = sim.grid.reflection_bounds
+        return (r -> pf_grid(design_point(r, bounds), params, gridx, gridy))
     elseif control.foundry_projection_mode == :current
-        pf_vals = [pf_grid(node, sim.grid) for node in sim.grid.nodes]
+        pf_vals = [pf_grid(design_point(node, sim.grid), sim.grid) for node in sim.grid.nodes]
         return FEFunction(sim.Pf, pf_vals)
     else
         error("Unsupported foundry_projection_mode=$(control.foundry_projection_mode). Use :current or :legacy.")
@@ -354,7 +366,8 @@ function scatter_point_legacy!(out::Vector{Float64}, grid::FoundryGrid, x, weigh
     gx, gy = grid.x, grid.y
     nx, ny = length(gx), length(gy)
     lin = LinearIndices((nx, ny))
-    xx, yy = x[1], x[2]
+    point = design_point(x, grid)
+    xx, yy = point[1], point[2]
 
     rx = searchsortedfirst(gx, xx)
     if rx > nx

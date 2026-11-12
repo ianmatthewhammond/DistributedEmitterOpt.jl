@@ -14,6 +14,7 @@ module DistributedEmitterOpt
 using LinearAlgebra
 using SparseArrays
 using Random
+using SHA: sha256
 using Statistics: mean
 using KrylovKit
 using Zygote
@@ -92,6 +93,7 @@ include("TopologyOpt/Constraints3D.jl")
 # ---------------------------------------------------------------------------
 
 include("Mesh/Meshes.jl")
+include("Mesh/AngularCells.jl")
 
 # ---------------------------------------------------------------------------
 # Solvers
@@ -125,7 +127,7 @@ using .Analysis
 # ---------------------------------------------------------------------------
 
 # Core types
-export FieldConfig, cache_key
+export FieldConfig, cache_key, inplane_wavevector, polarization_vector
 export MaterialSpec, Environment, resolve_index
 export ZPML, ZPMLParams, pml_stretch
 export RunLogConfig, activate_run_logger!, deactivate_run_logger!, with_run_logger
@@ -176,6 +178,8 @@ export glc_solid, glc_void, glc_solid_fe, glc_void_fe
 
 # Mesh
 export AbstractGeometry, SymmetricGeometry
+export build_angular_simulation, collection_configs, rim_collection_samples
+export reduce_mirror_samples
 export genmesh
 
 # Optimization

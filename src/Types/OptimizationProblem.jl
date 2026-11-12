@@ -267,10 +267,10 @@ function OptimizationProblem(
     outputs = if isnothing(λ_emission)
         FieldConfig[]  # elastic: empty outputs means reuse inputs
     else
-        [FieldConfig(λ_emission, θ=θ, pol=pol)]
+        [incident_config(env, λ_emission; θ, pol)]
     end
 
-    pde = MaxwellProblem(env=env, inputs=[FieldConfig(λ, θ=θ, pol=pol)], outputs=outputs)
+    pde = MaxwellProblem(env=env, inputs=[incident_config(env, λ; θ, pol)], outputs=outputs)
     obj = SERSObjective(αₚ=αₚ)
     OptimizationProblem(pde, obj, sim, solver; kwargs...)
 end

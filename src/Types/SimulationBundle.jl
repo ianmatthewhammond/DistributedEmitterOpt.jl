@@ -142,6 +142,7 @@ function build_simulation_bundle(meshfile::String;
         foundry_mode,
         sizes,
         model,
+        per_x, per_y,
         bot_PEC=bot_PEC)
 
     sim_x = build_simulation(meshfile;
@@ -152,6 +153,7 @@ function build_simulation_bundle(meshfile::String;
         foundry_mode,
         sizes,
         model,
+        per_x, per_y,
         bot_PEC=bot_PEC)
 
     # Scalar spaces have no polarization-dependent boundary constraints.

@@ -45,16 +45,15 @@ include(joinpath(@__DIR__, "gradient_common.jl"))
         @test rel_err < TOL_RELATIVE
     end
 
-    @testset "3D Oblique Incidence (Shifted Nabla)" begin
-        println("\n=== 3D Oblique Incidence (Shifted Nabla) ===")
+    @testset "Oblique incidence across a mirror is refused" begin
+        println("\n=== Inconsistent oblique mirror boundary ===")
         prob = build_test_problem(
             foundry_mode=false,
             θ=20.0,
             flag_volume=true
         )
         p0 = 0.4 .+ 0.2 .* rand(length(prob.p))
-        rel_err, _ = test_gradient(prob, p0)
-        @test rel_err < TOL_RELATIVE
+        @test_throws ArgumentError objective_and_gradient!(Float64[], p0, prob)
     end
 
     @testset "3D Complex Configuration" begin

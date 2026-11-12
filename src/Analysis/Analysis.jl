@@ -54,7 +54,8 @@ function spectral_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
         # TODO: Handle inelastic case more generally if needed
 
         # Create new inputs with updated wavelength
-        new_inputs = [FieldConfig(λ, θ=inp.θ, pol=inp.polarization) for inp in original_inputs]
+        new_inputs = [FieldConfig(λ; tilt_x=inp.tilt_x, tilt_y=inp.θ, pol=inp.polarization,
+            weight=inp.weight, n_incident=inp.n_incident, formulation=inp.formulation) for inp in original_inputs]
 
         # For outputs, if they are empty (elastic reuse), keep empty. 
         # If they exist (inelastic), we might need to shift them too? 
@@ -208,6 +209,7 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
 
     # 2. Solve fields for the first input config (nominal)
     config = prob.pde.inputs[1]
+    sim_fc = sim_for(sim, config)
 
     # Get solver cache
     pool_fc = pool_for(prob.pool, config)
@@ -215,7 +217,7 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
 
     # Assemble physics
     # Correct signature: build_phys_params(fc::FieldConfig, env::Environment, sim; α=0.0)
-    phys = build_phys_params(config, prob.pde.env, sim0; α=prob.pde.α_loss)
+    phys = build_phys_params(config, prob.pde.env, sim_fc; α=prob.pde.α_loss)
 
     # Manual forward solve for single config
     # 1. Factorize (if needed)
@@ -236,10 +238,10 @@ function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; ro
     b = assemble_source(sim_for(sim, config), phys; source_y)
 
     E_vec = maxwell_solve!(cache, b)
-    uh = FEFunction(sim0.U, E_vec)  # Assuming sim0 for visualization
+    uh = FEFunction(sim_fc.U, E_vec)
 
     # 3. Write fields
-    Ω = sim0.Ω
+    Ω = sim_fc.Ω
 
     writevtk(Ω, joinpath(root, "fields"), cellfields=[
         "E_real" => real(uh),

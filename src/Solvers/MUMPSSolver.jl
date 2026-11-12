@@ -5,15 +5,37 @@ Optional parallel sparse direct solver using MUMPS.
 Requires the user to independently install MUMPS.jl.
 
 The actual implementation is in ext/MUMPSExt.jl and only loads
-when MUMPS.jl is available.
+when MUMPS.jl is available. With a MUMPS.jl that has the `Sequential` backend (1.7.1
+does) it runs the sequential MUMPS build, which needs no MPI; otherwise it initializes
+MPI itself.
 """
 
 import SparseArrays: SparseMatrixCSC
 
-"""MUMPS-based solver (requires MUMPS.jl extension)."""
+"""
+MUMPS-based solver (requires MUMPS.jl extension). `symmetric=true` factorizes Maxwell
+matrices with symmetric storage (sym = 2), refused for a matrix that is not symmetric;
+the filter always uses it. `verbose=true` keeps MUMPS's statistics output, which is
+otherwise limited to errors.
+"""
 struct MUMPSSolver <: AbstractSolver
     symmetric::Bool
-    MUMPSSolver(; symmetric::Bool=false) = new(symmetric)
+    verbose::Bool
+    MUMPSSolver(; symmetric::Bool=false, verbose::Bool=false) = new(symmetric, verbose)
+end
+
+"""
+    checked_mumps_sym(symmetric, A) -> Int
+
+MUMPS storage code for `A`: 0 (unsymmetric) or 2 (general symmetric). Symmetric
+storage keeps one triangle, so it is refused for a matrix that is not symmetric,
+such as an oblique Bloch operator (A(κ)ᵀ = A(−κ)).
+"""
+function checked_mumps_sym(symmetric::Bool, A)
+    symmetric || return 0
+    norm(A - transpose(A)) <= 1e-12 * norm(A) ||
+        throw(ArgumentError("MUMPSSolver: symmetric storage (sym=2) needs a symmetric matrix; use MUMPSSolver(symmetric=false) for oblique Bloch fields"))
+    return 2
 end
 
 # Stub implementations that error if extension not loaded
