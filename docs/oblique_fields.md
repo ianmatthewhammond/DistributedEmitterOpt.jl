@@ -236,6 +236,20 @@ Pardiso to 10⁻¹². GPUs of compute capability 7.0 (V100) are not supported by
 pin the CUDA 12 runtime there with `CUDA.set_runtime_version!(v"12.9")`. On clusters
 whose GPU nodes have no internet access, install and precompile CUDA.jl and CUDSS.jl
 where there is, since CUDSS_jll downloads its library on first use.
+`CUDSSSolver(precision=:single)` stores the values of "S" factors in single precision (the
+factor values take half the memory; the full double matrix kept for residuals, the indices and
+cuDSS's workspace do not shrink). Every solve starts from that factor and is refined in double
+precision against the full matrix toward the tighter of `refine_rtol` (default 10⁻¹¹) and
+`residual_rtol`, at most `refine_steps` (default 20) times, each correction computed on the
+residual scaled to unit norm. Every returned answer meets `residual_rtol` (with
+`residual_rtol = 0`, `refine_rtol`); otherwise the solve throws. Plain refinement with a
+single-precision factor converges only when the matrix is well enough conditioned for it
+(roughly κ(A)·u_single < 1), so 10⁻¹¹ is an empirical target, set just above the double-precision
+floor some right-hand sides reach. "G" factors stay in double precision: cuDSS's single-precision
+general factor diverged under refinement on these matrices. In a standalone benchmark of the same
+factorizations on the quarter cell above, a single-precision "S" refactorization took 0.84 s on a
+V100 (4.1 s in double) and 0.29 s on a B200, and 4–5 refinement steps of a few milliseconds each
+reached 5·10⁻¹³; on GPUs with weak double precision it can be the faster choice.
 `test/cudss_solver_tests.jl` and `test/cudss_gradient_tests.jl` (with
 `DEO_SLOW_TESTS=1`) skip without CUDSS.jl or a GPU, unless `DEO_REQUIRE_CUDSS=1`.
 

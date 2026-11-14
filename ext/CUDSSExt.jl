@@ -44,6 +44,13 @@ collected it. If cleanup cannot start (the context cannot be made current, or th
 synchronized), the objects stay registered and are retried at the next call. Once a destroy has
 started it is never repeated: cuDSS consumes a valid object when its cleanup begins, even if the
 cleanup then reports an error (cuDSS 1.0 API reference), so a repeat would destroy it twice.
+
+With `CUDSSSolver(precision=:single)` an "S" factor stores its values in single precision; every
+solve starts from it and is refined in double precision against the full matrix toward the
+tighter of `refine_rtol` (default 1e-11) and `residual_rtol`, each correction computed on the
+residual scaled to unit norm, and every returned answer must meet `residual_rtol` (with
+`residual_rtol = 0`, the refinement target). "G" factors stay in double precision: cuDSS's
+single-precision general factor diverged under refinement on Maxwell matrices.
 """
 module CUDSSExt
 
@@ -118,15 +125,17 @@ end
 # Factor wrapper
 # ---------------------------------------------------------------------------
 
-mutable struct CudssFactor{T}
+# T: element type of the systems (ComplexF64 Maxwell, Float64 filter); Ts: element type of the
+# factor, T or its single-precision type (CUDSSSolver(precision=:single), "S" only).
+mutable struct CudssFactor{T,Ts}
     solver::Any                 # CUDSS.CudssSolver, or nothing once released
     structure::String           # "S" (lower triangle, A = Aᵀ) or "G"
-    stored::Any                 # device CSR matrix handed to cuDSS (kept alive)
-    full::Any                   # device CSR of the full A, for residuals
+    stored::Any                 # device CSR matrix handed to cuDSS, element type Ts (kept alive)
+    full::Any                   # device CSR of the full A in type T, for residuals
     n::Int                      # size and pattern of the stored matrix at the last analysis (copies)
     colptr::Vector{Int}
     rowval::Vector{Int}
-    xbuf::Any                   # device work vectors for the factorization phases
+    xbuf::Any                   # device work vectors (type Ts) for the factorization phases
     bbuf::Any
     xdesc::Any                  # their cuDSS dense descriptors
     bdesc::Any
@@ -136,7 +145,9 @@ mutable struct CudssFactor{T}
     id::UInt64                  # key of its cuDSS objects in LIVE
 end
 
-storage(A::SparseMatrixCSC, structure::String) = structure == "S" ? tril(A) : A
+storage(A::SparseMatrixCSC, structure::String, ::Type{Ts}) where Ts =
+    SparseMatrixCSC{Ts,Int}(structure == "S" ? tril(A) : A)
+factor_precision(::CudssFactor{T,Ts}) where {T,Ts} = Ts === T ? :double : :single
 same_pattern(f::CudssFactor, M::SparseMatrixCSC) =
     size(M) == (f.n, f.n) && M.colptr == f.colptr && M.rowval == f.rowval
 
@@ -247,9 +258,9 @@ end
 
 # Device arrays first, then cuDSS objects, then registration: a failure on the way releases
 # everything acquired so far.
-function new_factor(A::SparseMatrixCSC{T,Int}, structure::String) where T
+function new_factor(A::SparseMatrixCSC{T,Int}, structure::String, ::Type{Ts}) where {T,Ts}
     CUDACore.functional() || error("CUDSSSolver: no usable CUDA GPU (CUDACore.functional() is false)")
-    M = storage(A, structure)
+    M = storage(A, structure, Ts)
     n = size(A, 1)
     colptr, rowval = copy(M.colptr), copy(M.rowval)
     ctx = CUDACore.context()
@@ -261,10 +272,10 @@ function new_factor(A::SparseMatrixCSC{T,Int}, structure::String) where T
             f = nothing
             try
                 stored = device(M); push!(arrays, stored)
-                full = structure == "S" ? device(A) : stored
+                full = (structure == "S" || Ts !== T) ? device(A) : stored
                 full === stored || push!(arrays, full)
-                xbuf = CUDACore.CuVector{T}(undef, n); push!(arrays, xbuf)
-                bbuf = CUDACore.CuVector{T}(undef, n); push!(arrays, bbuf)
+                xbuf = CUDACore.CuVector{Ts}(undef, n); push!(arrays, xbuf)
+                bbuf = CUDACore.CuVector{Ts}(undef, n); push!(arrays, bbuf)
                 data = CUDSS.CudssData(own_handle(ctx)); push!(objs, data)
                 config = CUDSS.CudssConfig(); push!(objs, config)
                 matrix = CUDSS.CudssMatrix(stored, structure, structure == "S" ? 'L' : 'F'); push!(objs, matrix)
@@ -272,7 +283,7 @@ function new_factor(A::SparseMatrixCSC{T,Int}, structure::String) where T
                 bdesc = CUDSS.CudssMatrix(bbuf); push!(objs, bdesc)
                 solver = CUDSS.CudssSolver(matrix, config, data)
                 id = Threads.atomic_add!(NEXT_ID, UInt64(1))
-                f = CudssFactor{T}(solver, structure, stored, full, n, colptr, rowval, xbuf, bbuf,
+                f = CudssFactor{T,Ts}(solver, structure, stored, full, n, colptr, rowval, xbuf, bbuf,
                     xdesc, bdesc, ctx, -1, false, id)
                 LIVE[id] = (ctx, objs)
                 finalizer(dropped!, f)
@@ -299,12 +310,13 @@ end
 # hit an illegal address in a later factorization.) Otherwise the old factor is released and a new
 # one is built. The device copies are made before the factor is touched; any failure after that
 # releases it.
-function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T}, A::SparseMatrixCSC{T,Int},
-                  structure::String) where T
-    M = storage(A, structure)
+function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T,Tf}, A::SparseMatrixCSC{T,Int},
+                  structure::String) where {T,Tf}
+    Ts = DEO.cudss_storage_type(solver, T, structure)
+    M = storage(A, structure, Ts)
     reused = lock(CUDSS_LOCK) do
         drain_dropped!()
-        if solver.reuse_analysis && !f.released && f.structure == structure && same_pattern(f, M)
+        if solver.reuse_analysis && !f.released && f.structure == structure && Tf === Ts && same_pattern(f, M)
             on_device(f.ctx) do
                 fresh = device(M)                     # same pattern, so the same CSR value order
                 full = f.full === f.stored ? nothing : device(A)   # residual matrix, unseen by cuDSS
@@ -328,7 +340,7 @@ function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T}, A::SparseMatrixCSC
             nothing
         end
     end
-    return reused === nothing ? new_factor(A, structure) : reused
+    return reused === nothing ? new_factor(A, structure, Ts) : reused
 end
 
 # ---------------------------------------------------------------------------
@@ -355,21 +367,36 @@ function raw_solve!(f::CudssFactor, x, b, mode::Char)
     return x
 end
 
-# z ≈ op(A)⁻¹ r from the factor, where op is the identity (forward) or the adjoint.
-function correction(f::CudssFactor{T}, r, adjoint::Bool) where T
+# z ≈ op(A)⁻¹ r from the factor (in its own precision), where op is the identity (forward) or
+# the adjoint.
+function factor_solve(f::CudssFactor{T,Ts}, r, adjoint::Bool) where {T,Ts}
     adjoint || return raw_solve!(f, similar(r), r, 'N')
     if f.structure == "S"
-        T <: Complex || return raw_solve!(f, similar(r), r, 'N')
+        Ts <: Complex || return raw_solve!(f, similar(r), r, 'N')
         return conj!(raw_solve!(f, similar(r), conj(r), 'N'))
     end
-    return raw_solve!(f, similar(r), r, T <: Complex ? 'C' : 'T')
+    return raw_solve!(f, similar(r), r, Ts <: Complex ? 'C' : 'T')
+end
+
+# The same in double precision. A single-precision factor gets the residual scaled to unit norm
+# first, so small corrections neither underflow nor lose their relative accuracy.
+correction(f::CudssFactor{T,T}, r, adjoint::Bool) where T = factor_solve(f, r, adjoint)
+function correction(f::CudssFactor{T,Ts}, r, adjoint::Bool) where {T,Ts}
+    σ = norm(r)
+    σ == 0 && return zero(r)
+    z = factor_solve(f, Ts.(r ./ σ), adjoint)
+    return T.(z) .* σ
 end
 
 # The true operator, from the full matrix: A x, or Aᴴ x (Aᵀ x for real matrices).
 apply(f::CudssFactor, x, adjoint::Bool) = adjoint ? f.full' * x : f.full * x
 
 # Solve op(A) x = b on the device, check the residual of op(A) itself, refine if needed.
-function checked_solve(solver::DEO.CUDSSSolver, f::CudssFactor{T}, b::Vector{T}, adjoint::Bool) where T
+# Refinement runs while the residual exceeds the target, the tighter of refine_rtol and
+# residual_rtol (refine_rtol alone when residual_rtol = 0), up to the step limit. Every returned
+# answer then passes acceptance: residual ≤ residual_rtol, or, with residual_rtol = 0, ≤ the target
+# for a single-precision factor. A double-precision factor with residual_rtol = 0 is unchecked.
+function checked_solve(solver::DEO.CUDSSSolver, f::CudssFactor{T,Ts}, b::Vector{T}, adjoint::Bool) where {T,Ts}
     DEO.checked_cudss_options(solver)
     lock(CUDSS_LOCK) do
         drain_dropped!()
@@ -379,18 +406,22 @@ function checked_solve(solver::DEO.CUDSSSolver, f::CudssFactor{T}, b::Vector{T},
         on_device(f.ctx) do
             bd = CUDACore.CuVector{T}(b)
             x = correction(f, bd, adjoint)
-            solver.residual_rtol > 0 || return Array(x)
+            accept = solver.residual_rtol
+            (Ts === T && accept == 0) && return Array(x)
             nb = norm(bd)
             nb == 0 && return Array(x)
+            rtol, steps = DEO.cudss_refinement(solver, T, Ts)
+            target = accept > 0 ? min(rtol, accept) : rtol
             rel = Inf
-            for step in 0:solver.refine_steps
+            for step in 0:steps
                 r = bd .- apply(f, x, adjoint)
                 rel = norm(r) / nb
-                (isfinite(rel) && rel <= solver.residual_rtol) && return Array(x)
-                step == solver.refine_steps && break
+                (isfinite(rel) && rel <= target) && break
+                step == steps && break
                 x .+= correction(f, r, adjoint)
             end
-            error("CUDSSSolver: $(adjoint ? "adjoint" : "forward") solve residual $rel exceeds residual_rtol=$(solver.residual_rtol) after $(solver.refine_steps) refinement steps (structure $(f.structure), npivots $(f.npivots))")
+            isfinite(rel) && rel <= (accept > 0 ? accept : target) && return Array(x)
+            error("CUDSSSolver: $(adjoint ? "adjoint" : "forward") solve residual $rel exceeds $(accept > 0 ? "residual_rtol=$accept" : "refine_rtol=$target") after $steps refinement steps (structure $(f.structure), $(factor_precision(f)) factor, npivots $(f.npivots))")
         end
     end
 end
@@ -399,14 +430,18 @@ end
 # Interface implementation
 # ---------------------------------------------------------------------------
 
-lu!(solver::DEO.CUDSSSolver, A::SparseMatrixCSC{ComplexF64,Int}) =
-    new_factor(A, DEO.checked_cudss_structure(DEO.checked_cudss_options(solver), A))
+function lu!(solver::DEO.CUDSSSolver, A::SparseMatrixCSC{ComplexF64,Int})
+    structure = DEO.checked_cudss_structure(DEO.checked_cudss_options(solver), A)
+    return new_factor(A, structure, DEO.cudss_storage_type(solver, ComplexF64, structure))
+end
 
 lu!(solver::DEO.CUDSSSolver, factor::CudssFactor{ComplexF64}, A::SparseMatrixCSC{ComplexF64,Int}) =
     refactor(solver, factor, A, DEO.checked_cudss_structure(DEO.checked_cudss_options(solver), A))
 
-filter_lu!(solver::DEO.CUDSSSolver, A::SparseMatrixCSC{Float64,Int}) =
-    (DEO.checked_cudss_options(solver); new_factor(A, DEO.checked_cudss_filter_structure(A)))
+function filter_lu!(solver::DEO.CUDSSSolver, A::SparseMatrixCSC{Float64,Int})
+    structure = DEO.checked_cudss_filter_structure(A)
+    return new_factor(A, structure, DEO.cudss_storage_type(DEO.checked_cudss_options(solver), Float64, structure))
+end
 
 filter_lu!(solver::DEO.CUDSSSolver, factor::CudssFactor{Float64}, A::SparseMatrixCSC{Float64,Int}) =
     refactor(DEO.checked_cudss_options(solver), factor, A, DEO.checked_cudss_filter_structure(A))

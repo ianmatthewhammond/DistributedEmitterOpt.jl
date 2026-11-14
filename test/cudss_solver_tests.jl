@@ -3,7 +3,8 @@
 # and adjoint solves against dense references (in both orders, so no solve mode leaks), a matrix
 # accepted as symmetric only to the tolerance (its adjoint must still be exact), analysis reuse
 # on new values, a new analysis on a new pattern, real filter matrices and their refactor, a
-# symmetric indefinite matrix with zero diagonal, a released factor, and the residual guard.
+# symmetric indefinite matrix with zero diagonal, single-precision factors refined in double,
+# a released factor, and the residual guard.
 # Skipped where CUDSS.jl or a CUDA GPU is not available, unless DEO_REQUIRE_CUDSS=1, which makes
 # a missing extension or GPU a failure.
 using Test, LinearAlgebra, SparseArrays, Random
@@ -274,6 +275,83 @@ else
         @test_throws DimensionMismatch DEO.solve_adjoint!(solver, live, zeros(ComplexF64, n + 1))
         @test cudss_relerr(DEO.solve!(solver, live, b), Matrix(A2) \ b) < 1e-12   # still usable
         DEO.release_factor!(solver, live)
+
+        # precision = :single: "S" factors in single precision (the stored matrix and work vectors;
+        # residuals use the full double matrix), refined in double; "G" stays in double.
+        single = CUDSSSolver(precision=:single)
+        resid(M, x, rhs; adj=false) = norm(rhs - (adj ? M' : M) * x) / norm(rhs)
+        f32 = DEO.lu!(single, A)
+        @test f32.structure == "S" && typeof(f32).parameters[2] === ComplexF32
+        @test eltype(f32.stored) === ComplexF32 && eltype(f32.full) === ComplexF64
+        @test cudss_relerr(DEO.solve!(single, f32, b), Matrix(A) \ b) < 1e-9
+        @test cudss_relerr(DEO.solve_adjoint!(single, f32, b), Matrix(A)' \ b) < 1e-9
+        @test resid(A, DEO.solve!(single, f32, b), b) <= 1e-11            # the default target
+        @test DEO.lu!(single, f32, A2) === f32
+        @test cudss_relerr(DEO.solve!(single, f32, b), Matrix(A2) \ b) < 1e-9
+        @test cudss_relerr(DEO.solve_adjoint!(single, f32, b), Matrix(A2)' \ b) < 1e-9
+        g64 = DEO.lu!(single, B)
+        @test g64.structure == "G" && typeof(g64).parameters[2] === ComplexF64
+        @test cudss_relerr(DEO.solve_adjoint!(single, g64, b), Matrix(B)' \ b) < 1e-12
+        fn32 = DEO.lu!(single, N)                       # symmetric only to the tolerance
+        @test typeof(fn32).parameters[2] === ComplexF32
+        @test cudss_relerr(DEO.solve!(single, fn32, e), Matrix(N) \ e) < 1e-9
+        @test cudss_relerr(DEO.solve_adjoint!(single, fn32, e), Matrix(N)' \ e) < 1e-9
+
+        # Acceptance: every answer meets residual_rtol, also when it is tighter than refine_rtol.
+        # The unrefined single-precision residual is checked to lie between the two tolerances, so
+        # returning on reaching refine_rtol (the old bug) would be caught here.
+        r0 = resid(A2, DEO.solve!(CUDSSSolver(precision=:single, refine_steps=0, residual_rtol=1e-2), f32, b), b)   # f32 holds A2 here
+        println("CUDSS unrefined single-precision residual: ", r0)
+        @test 1e-12 < r0 < 1e-4
+        loose = CUDSSSolver(precision=:single, refine_rtol=1e-4, residual_rtol=1e-12)
+        @test resid(A2, DEO.solve!(loose, f32, b), b) <= 1e-12
+        @test resid(A2, DEO.solve_adjoint!(loose, f32, b), b; adj=true) <= 1e-12
+        @test_throws ErrorException DEO.solve!(CUDSSSolver(precision=:single, refine_rtol=1e-4,
+                                                           residual_rtol=1e-12, refine_steps=0), f32, b)
+        tight = CUDSSSolver(precision=:single, residual_rtol=1e-12)
+        ft = DEO.lu!(tight, A)
+        @test resid(A, DEO.solve!(tight, ft, b), b) <= 1e-12
+        @test resid(A, DEO.solve_adjoint!(tight, ft, b), b; adj=true) <= 1e-12
+        # With residual_rtol = 0 a single factor must still reach refine_rtol, or throw.
+        free = CUDSSSolver(precision=:single, residual_rtol=0.0)
+        @test resid(A, DEO.solve!(free, DEO.lu!(free, A), b), b) <= 1e-11
+        stuck = CUDSSSolver(precision=:single, residual_rtol=0.0, refine_steps=0)
+        @test_throws ErrorException DEO.solve!(stuck, DEO.lu!(stuck, A), b)
+        @test_throws ErrorException DEO.solve!(CUDSSSolver(precision=:single, refine_steps=0, residual_rtol=1e-12),
+                                               DEO.lu!(single, A), b)
+        # A double factor with residual_rtol = 0 is returned unchecked (and is still accurate here).
+        unchecked = CUDSSSolver(residual_rtol=0.0)
+        @test cudss_relerr(DEO.solve!(unchecked, DEO.lu!(unchecked, A), b), Matrix(A) \ b) < 1e-12
+
+        # Zero and widely scaled right-hand sides; a zero right-hand side of the wrong size is
+        # still rejected.
+        @test all(iszero, DEO.solve!(single, f32, zeros(ComplexF64, n)))
+        @test_throws DimensionMismatch DEO.solve!(single, f32, zeros(ComplexF64, n - 1))
+        @test_throws DimensionMismatch DEO.solve_adjoint!(single, f32, zeros(ComplexF64, n - 1))
+        for scale in (1e-30, 1e30)
+            @test cudss_relerr(DEO.solve!(single, f32, scale .* b), Matrix(A2) \ (scale .* b)) < 1e-9
+        end
+
+        # Precision changes on the same matrix and pattern rebuild the factor; the old one is released.
+        fd = DEO.lu!(solver, A)
+        fs = DEO.lu!(single, fd, A)
+        @test fs !== fd && fd.released && typeof(fs).parameters[2] === ComplexF32
+        fd2 = DEO.lu!(solver, fs, A)
+        @test fd2 !== fs && fs.released && typeof(fd2).parameters[2] === ComplexF64
+        @test cudss_relerr(DEO.solve!(solver, fd2, b), Matrix(A) \ b) < 1e-12
+
+        # Single-precision filter factors: forward, adjoint and refactor.
+        fs32 = DEO.filter_lu!(single, F)
+        @test typeof(fs32).parameters[2] === Float32
+        @test cudss_relerr(DEO.solve!(single, fs32, c), Matrix(F) \ c) < 1e-9
+        @test cudss_relerr(DEO.solve_adjoint!(single, fs32, c), Matrix(F)' \ c) < 1e-9
+        @test DEO.filter_lu!(single, fs32, F2) === fs32
+        @test cudss_relerr(DEO.solve!(single, fs32, c), Matrix(F2) \ c) < 1e-9
+
+        @test_throws ArgumentError DEO.lu!(CUDSSSolver(precision=:half), A)
+        @test_throws ArgumentError DEO.lu!(CUDSSSolver(precision=:single, refine_rtol=0.0), A)
+        @test_throws ArgumentError DEO.lu!(CUDSSSolver(precision=:single, refine_rtol=NaN), A)
+
 
         # The residual check is on: a tolerance below roundoff with no refinement must throw.
         strict = CUDSSSolver(residual_rtol=1e-30, refine_steps=0)
