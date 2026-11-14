@@ -292,9 +292,13 @@ function new_factor(A::SparseMatrixCSC{T,Int}, structure::String) where T
     end
 end
 
-# New values on the analysed pattern and structure need a numerical factorization only.
-# Otherwise the old factor is released and a new one is built. The device copies are made
-# before the factor is touched; any failure after that releases it.
+# New values on the analysed pattern and structure need a numerical factorization only: they are
+# copied into the values array cuDSS already has, so every array cuDSS has seen (row offsets, column
+# indices, values) stays the same allocation for the life of the factor. (cuDSS does not document
+# whether its data keeps the pointers of the analysed matrix; a factor that replaced and freed them
+# hit an illegal address in a later factorization.) Otherwise the old factor is released and a new
+# one is built. The device copies are made before the factor is touched; any failure after that
+# releases it.
 function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T}, A::SparseMatrixCSC{T,Int},
                   structure::String) where T
     M = storage(A, structure)
@@ -302,21 +306,21 @@ function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T}, A::SparseMatrixCSC
         drain_dropped!()
         if solver.reuse_analysis && !f.released && f.structure == structure && same_pattern(f, M)
             on_device(f.ctx) do
-                old_stored, old_full = f.stored, f.full
-                stored = device(M)
-                full = structure == "S" ? device(A) : stored
+                fresh = device(M)                     # same pattern, so the same CSR value order
+                full = f.full === f.stored ? nothing : device(A)   # residual matrix, unseen by cuDSS
                 try
-                    CUDSS.cudss_update(f.solver, stored)
-                    f.stored = stored
-                    f.full = full
+                    copyto!(f.stored.nzVal, fresh.nzVal)
+                    if full !== nothing
+                        old_full, f.full = f.full, full
+                        free_device_matrix!(old_full)
+                    end
                 catch
                     release_cudss!(f)
                     rethrow()
+                finally
+                    free_device_matrix!(fresh)
                 end
                 factorize!(f; analyse=false)
-                # The descriptor now points at the new arrays; the old ones are no longer used.
-                free_device_matrix!(old_stored)
-                old_full === old_stored || free_device_matrix!(old_full)
                 f
             end
         else

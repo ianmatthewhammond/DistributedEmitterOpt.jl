@@ -27,6 +27,20 @@ end
 
 cudss_relerr(x, y) = norm(x - y) / norm(y)
 
+# The device arrays of the CSR matrix a factor handed to cuDSS.
+cudss_arrays(f) = (pointer(f.stored.rowPtr), pointer(f.stored.colVal), pointer(f.stored.nzVal))
+
+# Three factors that are registered while held (checked under GC.@preserve) and dropped without
+# release when this returns; @noinline so the caller's frame never holds them.
+@noinline function cudss_dropped_factors(solver, A, ext)
+    fs = [DEO.lu!(solver, A) for _ in 1:3]
+    GC.@preserve fs begin
+        ids = [f.id for f in fs]
+        registered = all(id -> haskey(ext.LIVE, id), ids)
+    end
+    return ids, registered
+end
+
 if !cudss_ready()
     cudss_required() && error("DEO_REQUIRE_CUDSS=1, but the CUDSSExt extension is not loaded or no CUDA GPU is functional")
     @info "CUDSS.jl with a CUDA GPU is not available; skipping the CUDSSSolver tests"
@@ -88,6 +102,26 @@ else
         @test g2 === g
         @test cudss_relerr(DEO.solve_adjoint!(solver, g2, b), Matrix(B2)' \ b) < 1e-12
         @test cudss_relerr(DEO.solve!(solver, g2, b), Matrix(B2) \ b) < 1e-12
+
+        # A refactorization writes the new values into the arrays cuDSS was analysed with, which stay
+        # the same allocations ("S" and "G"), even with the GC run and freed device memory handed back
+        # to the driver between refactorizations.
+        fs2 = DEO.lu!(solver, A2)
+        for (fk, Mk) in ((g2, B2), (fs2, A2))
+            ptrs = cudss_arrays(fk)
+            Ak = copy(Mk)
+            for k in 1:10
+                nonzeros(Ak) .= nonzeros(Mk) .* (1 + 0.05k)
+                GC.gc(true)
+                isdefined(CUDSS.CUDACore, :reclaim) && CUDSS.CUDACore.reclaim()
+                @test DEO.lu!(solver, fk, Ak) === fk
+                @test cudss_arrays(fk) == ptrs
+                @test cudss_relerr(DEO.solve!(solver, fk, b), Matrix(Ak) \ b) < 1e-12
+                @test cudss_relerr(DEO.solve_adjoint!(solver, fk, b), Matrix(Ak)' \ b) < 1e-12
+            end
+            @test DEO.lu!(solver, fk, Mk) === fk
+        end
+        DEO.release_factor!(solver, fs2)
 
         # Symmetric only to the tolerance: "S" is chosen, and the adjoint must still solve the
         # true Aᴴ (the refinement runs on the residual of Aᴴ, not of the stored symmetric part).
@@ -201,10 +235,8 @@ else
         @test haskey(ext.LIVE, ft.id)
         DEO.release_factor!(solver, ft)
         @test !haskey(ext.LIVE, ft.id) && ft.solver === nothing && ft.stored === nothing
-        held = Ref{Any}([DEO.lu!(solver, A2) for _ in 1:3])     # alive through the check below
-        ids = [g.id for g in held[]]
-        @test all(id -> haskey(ext.LIVE, id), ids)
-        held[] = nothing                                          # now dropped without release
+        ids, registered = cudss_dropped_factors(solver, A2, ext)
+        @test registered
         gone = false
         for attempt in 1:5
             GC.gc(true)
