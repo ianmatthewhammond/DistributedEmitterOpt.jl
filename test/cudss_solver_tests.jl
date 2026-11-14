@@ -57,6 +57,17 @@ else
         @test cudss_relerr(DEO.solve!(solver, f2, b), Matrix(A2) \ b) < 1e-12
         @test cudss_relerr(DEO.solve_adjoint!(solver, f2, b), Matrix(A2)' \ b) < 1e-12
 
+        # Many refactorizations with freshly uploaded values, each solved at once: cuDSS must run on
+        # the stream that uploaded the values (a factor of half-uploaded values would miss the
+        # residual check, and the solve would throw).
+        Ak = copy(A2)
+        for k in 1:20
+            nonzeros(Ak) .= nonzeros(A2) .* (1 + 0.05k)
+            @test DEO.lu!(solver, f2, Ak) === f2
+            @test cudss_relerr(DEO.solve!(solver, f2, b), Matrix(Ak) \ b) < 1e-12
+        end
+        DEO.lu!(solver, f2, A2)
+
         # A new pattern with the same structure gets a new analysis (a new factor).
         A3 = cudss_test_matrix(rng, n; symmetric=true)
         f3 = DEO.lu!(solver, f2, A3)
@@ -165,21 +176,36 @@ else
                 end for k in 1:4]
         @test maximum(fetch.(work)) < 1e-12
 
-        # Lifetimes: release removes the factor's solver from the registry at once; factors dropped
-        # without release are destroyed under the lock at a later call once the GC collects them.
+        # Lifetimes: release removes the factor from the registry at once; factors dropped without
+        # release are destroyed, under the lock, by a later call (here release_factor! itself) once
+        # the GC has collected them. The dropped factors are made in a function, so nothing here
+        # keeps them alive.
         @test haskey(ext.LIVE, ft.id)
         DEO.release_factor!(solver, ft)
         @test !haskey(ext.LIVE, ft.id) && ft.solver === nothing && ft.stored === nothing
-        base = length(ext.LIVE)
-        for _ in 1:3
-            DEO.lu!(solver, A2)                         # dropped at once
+        make_dropped(k) = [DEO.lu!(solver, A2).id for _ in 1:k]
+        ids = make_dropped(3)
+        @test all(id -> haskey(ext.LIVE, id), ids)
+        gone = false
+        for attempt in 1:5
+            GC.gc(true)
+            DEO.release_factor!(solver, DEO.lu!(solver, A2))    # drains, then releases its own
+            gone = !any(id -> haskey(ext.LIVE, id), ids)
+            gone && break
         end
-        @test length(ext.LIVE) == base + 3
-        GC.gc(true); GC.gc(true); GC.gc(true)
-        keep = DEO.lu!(solver, A2)                      # drains whatever the GC has collected
-        println("CUDSS registry after dropping 3 factors and collecting: ", length(ext.LIVE) - base, " (was 4)")
-        @test length(ext.LIVE) < base + 4
-        DEO.release_factor!(solver, keep)
+        println("CUDSS dropped factors destroyed: ", gone)
+        @test gone
+
+        # Options are checked at solve time too, and right-hand sides must match the factor (on a
+        # live factor, so neither check can pass on the released-factor error instead).
+        live = DEO.lu!(solver, A2)
+        @test !live.released
+        @test_throws ArgumentError DEO.solve!(CUDSSSolver(residual_rtol=NaN), live, b)
+        @test_throws ArgumentError DEO.solve_adjoint!(CUDSSSolver(refine_steps=-1), live, b)
+        @test_throws DimensionMismatch DEO.solve!(solver, live, b[1:end-1])
+        @test_throws DimensionMismatch DEO.solve_adjoint!(solver, live, zeros(ComplexF64, n + 1))
+        @test cudss_relerr(DEO.solve!(solver, live, b), Matrix(A2) \ b) < 1e-12   # still usable
+        DEO.release_factor!(solver, live)
 
         # The residual check is on: a tolerance below roundoff with no refinement must throw.
         strict = CUDSSSolver(residual_rtol=1e-30, refine_steps=0)

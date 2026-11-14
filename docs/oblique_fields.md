@@ -218,12 +218,14 @@ reused while the stored pattern is unchanged. After each factorization cuDSS's `
 is checked, and after each solve the residual of the intended operator, A or Aᴴ built
 from the full matrix, is computed on the device in double precision; up to
 `refine_steps` (3) refinement steps run if it exceeds `residual_rtol` (10⁻⁹), and a
-solve that still misses it throws. Every factor is built on one cuDSS handle owned by the
-extension, all cuDSS calls are serialized by one lock and the device is synchronized around
-them, so a factor may be used from any task. `release_factor!` destroys the factor's cuDSS
-objects and frees its device arrays at once; a factor dropped without release is destroyed,
-under the same lock, at a later call after the GC collects it. `residual_rtol` must be finite
-and ≥ 0 and `refine_steps` ≥ 0.
+solve that still misses it throws. Every factor is built, in the CUDA context current at
+its creation, on a cuDSS handle owned by the extension; all cuDSS calls are serialized by one
+lock, run on the calling task's stream and are synchronized, so a factor may be used from any
+task. Each factor's cuDSS objects are held until they are destroyed under that lock:
+`release_factor!` destroys them and frees the factor's device arrays at once, and a factor
+dropped without release is destroyed at a later call after the GC collects it. Options are
+checked when a factor is built and at every solve (`residual_rtol` finite and ≥ 0,
+`refine_steps` ≥ 0), and a right-hand side must match the factor's size.
 
 On a 435,606-unknown lowest-order Nédélec quarter cell (6.9 M nonzeros) a numerical
 refactorization with reused analysis took 0.34 s ("S") and 0.49 s ("G") on an NVIDIA
