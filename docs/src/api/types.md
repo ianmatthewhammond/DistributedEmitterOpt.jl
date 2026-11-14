@@ -57,6 +57,7 @@ Caches for LU factorizations, keyed by wavelength. [`SolverPoolBundle`](@ref) mi
 ```@docs
 AbstractSolver
 UmfpackSolver
+CUDSSSolver
 SolverCache
 SolverCachePool
 SolverPoolBundle

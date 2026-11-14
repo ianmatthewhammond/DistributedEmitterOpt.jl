@@ -102,6 +102,7 @@ include("Mesh/AngularCells.jl")
 include("Solvers/UmfpackSolver.jl")
 include("Solvers/MUMPSSolver.jl")
 include("Solvers/PardisoSolver.jl")
+include("Solvers/CUDSSSolver.jl")   # uses symmetry_defect from PardisoSolver.jl
 
 # ---------------------------------------------------------------------------
 # Optimization
@@ -150,7 +151,7 @@ export init_uniform!, init_random!, init_from_file!
 # Infrastructure
 export FoundryGrid, getgrid, pf_grid
 export Control, tanh_projection, Threshold
-export AbstractSolver, SolverCache, SolverCachePool, UmfpackSolver, MUMPSSolver, PardisoSolver
+export AbstractSolver, SolverCache, SolverCachePool, UmfpackSolver, MUMPSSolver, PardisoSolver, CUDSSSolver
 export get_cache!, clear_maxwell_factors!, clear_eigen_factors!
 export Simulation, build_simulation
 

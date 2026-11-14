@@ -170,9 +170,9 @@ angle-dependent frequency-domain operator by silently reusing its old shift.
 ## Solver backends
 
 `UmfpackSolver()` runs everywhere and is the default. `MUMPSSolver()` needs MUMPS.jl
-(and MPI), and `PardisoSolver()` needs Pardiso.jl and MKL. Each solves A x = b and
-the adjoint Aᴴ x = b on one factorization, so all three are valid for oblique
-fields.
+(and MPI), `PardisoSolver()` needs Pardiso.jl and MKL, and `CUDSSSolver()` needs
+CUDSS.jl and an NVIDIA GPU. Each solves A x = b and the adjoint Aᴴ x = b on one
+factorization, so all four are valid for oblique fields.
 
 `PardisoSolver` drives MKL Pardiso through Pardiso.jl; `import Pardiso` loads the
 extension. Pardiso.jl exports its own `PardisoSolver`, so after `using Pardiso`
@@ -203,6 +203,41 @@ costs one numerical factorization. The legacy iparm profile applies to
 full-storage Maxwell factorizations, and mtype 6 keeps MKL's defaults; a custom
 `iparm` must keep iparm(1) = 1, iparm(6) = 0, iparm(28) = 0 and iparm(35) = 0,
 and iparm(12) is set by the backend for each solve.
+
+`CUDSSSolver` factors on an NVIDIA GPU with cuDSS through CUDSS.jl 1.0 or later;
+`using CUDSS` loads the extension. Matrices are built on the host as before and copied
+to the device in CSR form for each factorization. As for Pardiso, the structure is
+chosen per factorization on the full matrix: a complex symmetric matrix (the same
+10⁻¹² test) is factored as LDLᵀ from its lower triangle (cuDSS structure "S", which
+for complex values is the transpose, not the Hermitian, factorization: checked with a
+matrix that is transpose symmetric but not Hermitian), and any other matrix as a
+general LDU ("G"). The adjoint of "S" is the plain solve on conj(b), conjugated; the
+adjoint of "G" uses cuDSS's conjugate-transpose solve mode on the same factor.
+`assume_symmetric_maxwell` has the same three settings as for Pardiso. The analysis is
+reused while the stored pattern is unchanged. After each factorization cuDSS's `info`
+is checked, and after each solve the residual of the intended operator, A or Aᴴ built
+from the full matrix, is computed on the device in double precision; up to
+`refine_steps` (3) refinement steps run if it exceeds `residual_rtol` (10⁻⁹), and a
+solve that still misses it throws. Every factor is built, in the CUDA context current at
+its creation, on a cuDSS handle owned by the extension; all cuDSS calls are serialized by one
+lock and run, with the uploads, residuals and frees around them, on one CUDA stream the
+extension owns per context (cuDSS keeps the stream a factor's analysis ran on), so a factor may
+be used from any task. Each factor's cuDSS objects are held until they are destroyed under that lock:
+`release_factor!` destroys them and frees the factor's device arrays at once, and a factor
+dropped without release is destroyed at a later call after the GC collects it. Options are
+checked when a factor is built and at every solve (`residual_rtol` finite and ≥ 0,
+`refine_steps` ≥ 0), and a right-hand side must match the factor's size.
+
+On a 435,606-unknown lowest-order Nédélec quarter cell (6.9 M nonzeros) a numerical
+refactorization with reused analysis took 0.34 s ("S") and 0.49 s ("G") on an NVIDIA
+B200 and 4.1 s / 7.4 s on a V100, against 5.6–6.5 s (mtype 6) and 8.9–11.2 s
+(mtype 13) for MKL Pardiso on 32 cores of the B200 node's host; solutions agreed with
+Pardiso to 10⁻¹². GPUs of compute capability 7.0 (V100) are not supported by CUDA 13:
+pin the CUDA 12 runtime there with `CUDA.set_runtime_version!(v"12.9")`. On clusters
+whose GPU nodes have no internet access, install and precompile CUDA.jl and CUDSS.jl
+where there is, since CUDSS_jll downloads its library on first use.
+`test/cudss_solver_tests.jl` and `test/cudss_gradient_tests.jl` (with
+`DEO_SLOW_TESTS=1`) skip without CUDSS.jl or a GPU, unless `DEO_REQUIRE_CUDSS=1`.
 
 The previous extension went through GridapPardiso. Its `solve!` performs the forward
 solve only (iparm(12) is fixed with the solver and flipped for the CSC layout), so

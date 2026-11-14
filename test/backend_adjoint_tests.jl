@@ -8,12 +8,14 @@
 using DistributedEmitterOpt, LinearAlgebra, SparseArrays, Random, Test
 const DEO = DistributedEmitterOpt
 
-# MUMPS.jl and Pardiso.jl load only when they are installed; Pardiso also needs MKL.
+# MUMPS.jl, Pardiso.jl and CUDSS.jl load only when they are installed; Pardiso also needs MKL,
+# and CUDSS a CUDA GPU.
 if Base.find_package("MUMPS") !== nothing
     @eval using MUMPS
     MUMPS.MPI.Initialized() || MUMPS.MPI.Init()
 end
 Base.find_package("Pardiso") !== nothing && @eval import Pardiso
+Base.find_package("CUDSS") !== nothing && @eval using CUDSS
 
 relres(r, b) = norm(r) / norm(b)
 
@@ -35,11 +37,16 @@ end
     S = A + transpose(A)                       # complex symmetric
     mumps = Base.get_extension(DistributedEmitterOpt, :MUMPSExt) !== nothing
     pardiso = Base.get_extension(DistributedEmitterOpt, :PardisoExt) !== nothing && Pardiso.mkl_is_available()
-    println("EXTENSIONS MUMPS=$mumps Pardiso=$pardiso")
+    cudss = Base.get_extension(DistributedEmitterOpt, :CUDSSExt) !== nothing && CUDSS.CUDACore.functional()
+    cudss_loaded = isdefined(@__MODULE__, :CUDSS) && CUDSS.CUDACore.functional()
+    (cudss_loaded || get(ENV, "DEO_REQUIRE_CUDSS", "0") == "1") && !cudss &&
+        error("CUDSSSolver is required (DEO_REQUIRE_CUDSS=1, or CUDSS.jl with a GPU is loaded) but the CUDSSExt extension is not available")
+    println("EXTENSIONS MUMPS=$mumps Pardiso=$pardiso CUDSS=$cudss")
 
     backends = Any[("UMFPACK", UmfpackSolver())]
     mumps && push!(backends, ("MUMPS", MUMPSSolver()))
     pardiso && push!(backends, ("Pardiso", PardisoSolver()))
+    cudss && push!(backends, ("cuDSS", CUDSSSolver()))
     for (name, s) in backends, (M, rhs) in ((A, b), (B, bB))
         @test norm(M - transpose(M)) > 1e-2 * norm(M)
         f = DEO.lu!(s, M)
