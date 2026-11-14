@@ -22,6 +22,13 @@ matrix (so a matrix accepted as symmetric only to `SYMMETRY_RTOL` still gets its
 the residual is computed on the GPU in double precision, and if it exceeds `residual_rtol`
 (relative to ‖b‖) up to `refine_steps` steps of iterative refinement are taken before an error is
 thrown. cuDSS work is serialized process-wide, so factors may be used from any task.
+
+`precision = :single` stores the values of "S" factors in single precision (the factor values
+take half the memory; the double matrix kept for residuals, indices and workspace do not) and
+refines each solve in double precision toward the tighter of `refine_rtol` (default 1e-11) and
+`residual_rtol`; every returned answer meets `residual_rtol` (with `residual_rtol = 0`, the
+refinement target) or the solve throws. Convergence needs the matrix to be well enough
+conditioned for a single-precision factor; "G" factors stay in double precision.
 """
 Base.@kwdef struct CUDSSSolver <: AbstractSolver
     # `assume_symmetric_maxwell` : `nothing` (default) picks LDLᵀ ("S") for each factorization
@@ -29,12 +36,43 @@ Base.@kwdef struct CUDSSSolver <: AbstractSolver
     #                         SYMMETRY_RTOL`) and general LDU ("G") otherwise; `true` forces "S"
     #                         (refused for a matrix that is not symmetric), `false` forces "G"
     # `reuse_analysis`      : Reuse the cuDSS analysis while the sparsity pattern is unchanged
+    # `precision`           : `:double` (default) or `:single`. `:single` factors symmetric ("S")
+    #                         matrices in single precision and refines every solve in double
+    #                         precision against the full matrix; general ("G") matrices stay in
+    #                         double (cuDSS's single-precision general factor is not reliable here)
     # `residual_rtol`       : Largest accepted ‖b − op(A)x‖/‖b‖ after a solve; 0 disables the check
-    # `refine_steps`        : Iterative refinement steps allowed before a solve is refused
+    #                         (for `:double`; a single-precision factor is always refined)
+    # `refine_rtol`         : Refinement continues while the residual exceeds this; `nothing` means
+    #                         `residual_rtol` for a double factor and 1e-11 for a single one
+    # `refine_steps`        : Refinement steps allowed per solve; `nothing` means 3 for a double
+    #                         factor and 20 for a single one
     assume_symmetric_maxwell::Union{Nothing,Bool} = nothing
     reuse_analysis::Bool = true
+    precision::Symbol = :double
     residual_rtol::Float64 = 1e-9
-    refine_steps::Int = 3
+    refine_rtol::Union{Nothing,Float64} = nothing
+    refine_steps::Union{Nothing,Int} = nothing
+end
+
+"""
+    cudss_storage_type(solver, T, structure) -> element type of the factor
+
+`T` for `precision = :double`. For `:single`, the single-precision type of `T` when the structure
+is "S", and `T` for "G". An unknown `precision` is refused.
+"""
+function cudss_storage_type(solver::CUDSSSolver, ::Type{T}, structure::AbstractString) where T
+    solver.precision in (:double, :single) ||
+        throw(ArgumentError("CUDSSSolver: precision must be :double or :single, got :$(solver.precision)"))
+    (solver.precision === :single && structure == "S") || return T
+    return T <: Complex ? ComplexF32 : Float32
+end
+
+"Refinement target and step limit for a factor of element type `Ts` solving systems of type `T`."
+function cudss_refinement(solver::CUDSSSolver, ::Type{T}, ::Type{Ts}) where {T,Ts}
+    single = Ts !== T
+    rtol = something(solver.refine_rtol, single ? 1e-11 : solver.residual_rtol)
+    steps = something(solver.refine_steps, single ? 20 : 3)
+    return rtol, steps
 end
 
 """
@@ -56,12 +94,16 @@ function checked_cudss_structure(solver::CUDSSSolver, A)
     return defect <= SYMMETRY_RTOL ? "S" : "G"
 end
 
-"Validate a CUDSSSolver's options (a finite residual_rtol ≥ 0, refine_steps ≥ 0); returns the solver."
+"Validate a CUDSSSolver's options (finite residual_rtol ≥ 0; refine_steps ≥ 0 and refine_rtol > 0 when given; precision); returns the solver."
 function checked_cudss_options(solver::CUDSSSolver)
     (isfinite(solver.residual_rtol) && solver.residual_rtol >= 0) ||
         throw(ArgumentError("CUDSSSolver: residual_rtol must be finite and ≥ 0 (0 disables the check), got $(solver.residual_rtol)"))
-    solver.refine_steps >= 0 ||
-        throw(ArgumentError("CUDSSSolver: refine_steps must be ≥ 0, got $(solver.refine_steps)"))
+    (solver.refine_steps === nothing || solver.refine_steps >= 0) ||
+        throw(ArgumentError("CUDSSSolver: refine_steps must be ≥ 0 or nothing, got $(solver.refine_steps)"))
+    (solver.refine_rtol === nothing || (isfinite(solver.refine_rtol) && solver.refine_rtol > 0)) ||
+        throw(ArgumentError("CUDSSSolver: refine_rtol must be finite and > 0, or nothing, got $(solver.refine_rtol)"))
+    solver.precision in (:double, :single) ||
+        throw(ArgumentError("CUDSSSolver: precision must be :double or :single, got :$(solver.precision)"))
     return solver
 end
 

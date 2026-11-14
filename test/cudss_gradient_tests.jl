@@ -4,7 +4,7 @@
 # UMFPACK at 45°, for a 45° pump with a normal emission, and at normal incidence. The structure
 # must be "G" for tilted fields and "S" for normal ones, including the normal emission of a
 # tilted pump. The shortcut adjoint conj(A⁻¹ conj b) on the general factor must fail the 45°
-# ladder. Skipped where CUDSS.jl or a CUDA GPU is not available, unless DEO_REQUIRE_CUDSS=1.
+# ladder. With precision = :single, objectives and gradients still match UMFPACK to 1e-9. Skipped where CUDSS.jl or a CUDA GPU is not available, unless DEO_REQUIRE_CUDSS=1.
 include("oblique_common.jl")
 Base.find_package("CUDSS") !== nothing && @eval using CUDSS
 
@@ -27,9 +27,9 @@ cudss_with(prob, solver) = OptimizationProblem(prob.pde, prob.objective, prob.si
     foundry_mode=true, control=prob.control)
 
 # Objective and gradient at two random designs (the second on refactorized factors).
-function cudss_against_umfpack(label, prob)
+function cudss_against_umfpack(label, prob; solver=CUDSSSolver(), tol=1e-10)
     rng = MersenneTwister(1103)
-    reference, candidate = cudss_with(prob, UmfpackSolver()), cudss_with(prob, CUDSSSolver())
+    reference, candidate = cudss_with(prob, UmfpackSolver()), cudss_with(prob, solver)
     for design in 1:2
         p = 0.4 .+ 0.2 .* rand(rng, length(prob.p))
         gu = zeros(length(p)); gc = zeros(length(p))
@@ -37,8 +37,8 @@ function cudss_against_umfpack(label, prob)
         tc = @elapsed fc = objective_and_gradient!(gc, p, candidate)
         df, dg = abs(fc - fu) / abs(fu), norm(gc - gu) / norm(gu)
         println("CUDSS $label design $design: objective=$df gradient=$dg seconds umfpack=$tu cudss=$tc")
-        @test df < 1e-10
-        @test dg < 1e-10
+        @test df < tol
+        @test dg < tol
     end
     return candidate
 end
@@ -83,10 +83,18 @@ else
 
         # Normal incidence on the quarter cell: every factor is symmetric.
         fc = FieldConfig(532; tilt_x=0, pol=:y)
-        q = cudss_against_umfpack("normal", angular_test_problem([fc], [fc]))
+        normal = angular_test_problem([fc], [fc])
+        q = cudss_against_umfpack("normal", normal)
         s = cudss_structures(q)
         println("CUDSS normal structures: $s")
         @test !isempty(s) && all(==("S"), values(s))
+
+        # precision = :single: single-precision "S" factors refined in double to 1e-11 give the
+        # same objective and gradient; tilted ("G") factors stay double.
+        q = cudss_against_umfpack("normal, single precision", normal; solver=CUDSSSolver(precision=:single), tol=1e-9)
+        @test all(c -> typeof(c.A_factor).parameters[2] === ComplexF32,
+                  (c for pool in cudss_pools(q.pool) for c in values(pool.caches) if c.A_factor !== nothing))
+        cudss_against_umfpack("normal emission, single precision", mixed; solver=CUDSSSolver(precision=:single), tol=1e-9)
     end
 end
 GC.gc()
