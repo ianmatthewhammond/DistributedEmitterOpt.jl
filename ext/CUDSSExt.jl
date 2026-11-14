@@ -37,9 +37,13 @@ factorization buffers) is held in a registry until it is destroyed under one pro
 the dense descriptors of each solve are created and destroyed under the same lock. All cuDSS work
 is serialized by that lock and runs on one stream the extension owns per context (set on the
 handle once, so every analysis binds to it; the calling task is switched to it for the duration of
-each operation), and the solve mode is set on every solve, so a factor can be used from any task. `release_factor!` destroys a factor's
-cuDSS objects and frees its device arrays at once; a factor dropped without release is destroyed
-at the next call into the extension after the GC has collected it.
+each operation), and the solve mode is set on every solve, so a factor can be used from any task.
+`release_factor!` destroys a factor's cuDSS objects and frees its device arrays at once; a factor
+dropped without release is destroyed at the next call into the extension after the GC has
+collected it. If cleanup cannot start (the context cannot be made current, or the stream cannot be
+synchronized), the objects stay registered and are retried at the next call. Once a destroy has
+started it is never repeated: cuDSS consumes a valid object when its cleanup begins, even if the
+cleanup then reports an error (cuDSS 1.0 API reference), so a repeat would destroy it twice.
 """
 module CUDSSExt
 
@@ -70,6 +74,9 @@ const DROPPED = UInt64[]
 const DROPPED_LOCK = Threads.SpinLock()
 const NEXT_ID = Threads.Atomic{UInt64}(0)
 
+"Test hook: while true, `destroy!` fails before any cleanup starts, as a failed context switch would."
+const CLEANUP_FAULT = Ref(false)
+
 # Streams. cuDSS data keeps the stream its analysis ran on, so a factor executes there whichever
 # task calls it, and CUDA.jl gives each task its own non-blocking stream. The extension therefore
 # owns one stream per context, sets it on its handle once (so every analysis binds to it), and runs
@@ -91,7 +98,12 @@ on_device(f, ctx) = CUDACore.context!(() -> CUDACore.stream!(f, own_stream(ctx))
 "Wait for the current stream (the extension's, inside `on_device`)."
 devsync() = CUDACore.synchronize()
 
-finalize_all!(objs) = foreach(o -> (try finalize(o) catch end), objs)
+# Destroy CUDSS.jl objects, each exactly once: `finalize` runs the object's CUDSS.jl finalizer (the
+# cuDSS destroy call) and removes it, so the GC never destroys the object again. A destroy that
+# reports an error has still consumed the object (cuDSS 1.0 API reference: "A valid ... object is
+# consumed once cleanup begins, including when cleanup reports an error"), so it is not retried;
+# Julia reports the error on stderr, as for any failing finalizer.
+finalize_all!(objs) = foreach(finalize, objs)
 
 free_device!(a) = (isdefined(CUDACore, :unsafe_free!) && a isa CUDACore.CuArray) && CUDACore.unsafe_free!(a)
 function free_device_matrix!(M)
@@ -142,25 +154,31 @@ function dropped!(f::CudssFactor)
     return nothing
 end
 
-# Call with CUDSS_LOCK held. Destroys one registered set of cuDSS objects (not the handle) in its
-# own context; idempotent.
 # Call with CUDSS_LOCK held. Destroys one registered set of cuDSS objects (not the handle) on its
-# context's stream. Returns false, keeping the entry (and so the objects) rooted, if that fails.
+# context's stream; idempotent. Returns false, keeping the entry (and so the objects, and the device
+# arrays their descriptors hold) rooted for a retry, if cleanup cannot start: the context cannot be
+# made current or the stream cannot be synchronized. Once the destroy calls start, every object is
+# consumed (see `finalize_all!`) and the entry goes.
 function destroy!(id::UInt64)
     entry = get(LIVE, id, nothing)
     entry === nothing && return true
     ctx, objs = entry
+    started = false
     try
+        CLEANUP_FAULT[] && error("CUDSSExt: injected cleanup failure (test hook)")
         on_device(ctx) do
             devsync()
+            started = true
             finalize_all!(objs)
         end
     catch
-        return false
+        started || return false
     end
     delete!(LIVE, id)
     return true
 end
+
+queue_dropped!(id::UInt64) = lock(() -> push!(DROPPED, id), DROPPED_LOCK)
 
 # Call with CUDSS_LOCK held: destroy the objects of factors the GC has collected (those that
 # cannot be destroyed now stay registered and are retried).
@@ -170,19 +188,21 @@ function drain_dropped!()
         empty!(DROPPED)
         ids
     end
-    failed = filter(id -> !destroy!(id), ids)
-    isempty(failed) || lock(() -> append!(DROPPED, failed), DROPPED_LOCK)
+    foreach(id -> destroy!(id) || queue_dropped!(id), ids)
     return nothing
 end
 
 # Call with CUDSS_LOCK held. Destroys the factor's cuDSS objects and frees its device arrays;
-# idempotent.
+# idempotent. If cleanup cannot start, the factor is still released (it cannot be used again) and
+# its registered objects are queued, like a dropped factor's, for the next call to retry.
 function release_cudss!(f::CudssFactor)
     f.released && return nothing
     f.released = true
     # Device arrays are freed only once the cuDSS objects using them are destroyed; otherwise they
-    # stay referenced by those (still registered) objects.
-    if destroy!(f.id)
+    # stay referenced by those (still registered) objects and go with them.
+    if !destroy!(f.id)
+        queue_dropped!(f.id)
+    else
         try
             on_device(f.ctx) do
                 free_device_matrix!(f.stored)

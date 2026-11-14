@@ -215,6 +215,23 @@ else
         println("CUDSS dropped factors destroyed: ", gone)
         @test gone
 
+        # A release whose cleanup cannot start keeps the objects registered and queues them; the
+        # next call into the extension destroys them.
+        fr = DEO.lu!(solver, A2)
+        ext.CLEANUP_FAULT[] = true
+        try
+            DEO.release_factor!(solver, fr)
+        finally
+            ext.CLEANUP_FAULT[] = false
+        end
+        @test fr.released && fr.solver === nothing
+        @test haskey(ext.LIVE, fr.id)
+        @test fr.id in lock(() -> copy(ext.DROPPED), ext.DROPPED_LOCK)
+        DEO.release_factor!(solver, fr)                           # released already: a no-op that drains
+        @test !haskey(ext.LIVE, fr.id)
+        @test !(fr.id in lock(() -> copy(ext.DROPPED), ext.DROPPED_LOCK))
+        @test_throws ArgumentError DEO.solve!(solver, fr, b)
+
         # Options are checked at solve time too, and right-hand sides must match the factor (on a
         # live factor, so neither check can pass on the released-factor error instead).
         live = DEO.lu!(solver, A2)
