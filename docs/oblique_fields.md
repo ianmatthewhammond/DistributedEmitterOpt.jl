@@ -220,8 +220,9 @@ from the full matrix, is computed on the device in double precision; up to
 `refine_steps` (3) refinement steps run if it exceeds `residual_rtol` (10⁻⁹), and a
 solve that still misses it throws. Every factor is built, in the CUDA context current at
 its creation, on a cuDSS handle owned by the extension; all cuDSS calls are serialized by one
-lock, run on the calling task's stream and are synchronized, so a factor may be used from any
-task. Each factor's cuDSS objects are held until they are destroyed under that lock:
+lock and run, with the uploads, residuals and frees around them, on one CUDA stream the
+extension owns per context (cuDSS keeps the stream a factor's analysis ran on), so a factor may
+be used from any task. Each factor's cuDSS objects are held until they are destroyed under that lock:
 `release_factor!` destroys them and frees the factor's device arrays at once, and a factor
 dropped without release is destroyed at a later call after the GC collects it. Options are
 checked when a factor is built and at every solve (`residual_rtol` finite and ≥ 0,

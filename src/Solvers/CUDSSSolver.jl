@@ -44,6 +44,7 @@ The cuDSS structure for one Maxwell factorization, decided on the full matrix be
 discards the upper triangle. A forced "S" is refused for a matrix that is not symmetric.
 """
 function checked_cudss_structure(solver::CUDSSSolver, A)
+    LinearAlgebra.checksquare(A)
     choice = solver.assume_symmetric_maxwell
     choice === false && return "G"
     defect = symmetry_defect(A)
@@ -65,7 +66,7 @@ function checked_cudss_options(solver::CUDSSSolver)
 end
 
 "Real filter matrices: LDLᵀ when symmetric, general LDU otherwise."
-checked_cudss_filter_structure(A) = symmetry_defect(A) <= SYMMETRY_RTOL ? "S" : "G"
+checked_cudss_filter_structure(A) = (LinearAlgebra.checksquare(A); symmetry_defect(A) <= SYMMETRY_RTOL ? "S" : "G")
 
 # Stub implementations that error if the extension is not loaded
 const CUDSS_NOT_LOADED = "CUDSS extension not loaded. Install CUDSS.jl 1.0 or later (using Pkg; Pkg.add(\"CUDSS\")) and load it with `using CUDSS`; CUDSSSolver needs an NVIDIA GPU, so use PardisoSolver() or UmfpackSolver() without one"

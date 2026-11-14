@@ -176,6 +176,24 @@ else
                 end for k in 1:4]
         @test maximum(fetch.(work)) < 1e-12
 
+        # A factor analysed in one task and then refactorized and solved, forward and adjoint, from
+        # another: every operation must run on the extension's stream, whichever task calls it.
+        fx = fetch(Threads.@spawn DEO.lu!(solver, A2))
+        Ax = copy(A2)
+        for k in 1:20
+            nonzeros(Ax) .= nonzeros(A2) .* (1 + 0.03k)
+            @test DEO.lu!(solver, fx, Ax) === fx
+            @test cudss_relerr(DEO.solve!(solver, fx, b), Matrix(Ax) \ b) < 1e-12
+            @test cudss_relerr(DEO.solve_adjoint!(solver, fx, b), Matrix(Ax)' \ b) < 1e-12
+        end
+        DEO.release_factor!(solver, fx)
+
+        # Rectangular matrices are refused before any structure is chosen or anything is allocated.
+        R = sprand(rng, ComplexF64, n, n + 1, 4 / n)
+        @test_throws DimensionMismatch DEO.lu!(CUDSSSolver(assume_symmetric_maxwell=false), R)
+        @test_throws DimensionMismatch DEO.lu!(solver, R)
+        @test_throws DimensionMismatch DEO.filter_lu!(solver, real(R))
+
         # Lifetimes: release removes the factor from the registry at once; factors dropped without
         # release are destroyed, under the lock, by a later call (here release_factor! itself) once
         # the GC has collected them. The dropped factors are made in a function, so nothing here
@@ -183,9 +201,10 @@ else
         @test haskey(ext.LIVE, ft.id)
         DEO.release_factor!(solver, ft)
         @test !haskey(ext.LIVE, ft.id) && ft.solver === nothing && ft.stored === nothing
-        make_dropped(k) = [DEO.lu!(solver, A2).id for _ in 1:k]
-        ids = make_dropped(3)
+        held = Ref{Any}([DEO.lu!(solver, A2) for _ in 1:3])     # alive through the check below
+        ids = [g.id for g in held[]]
         @test all(id -> haskey(ext.LIVE, id), ids)
+        held[] = nothing                                          # now dropped without release
         gone = false
         for attempt in 1:5
             GC.gc(true)

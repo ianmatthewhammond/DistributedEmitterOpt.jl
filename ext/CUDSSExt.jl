@@ -35,9 +35,9 @@ by this extension (one per context, never returned), and all its later work runs
 Every cuDSS object (data, configuration, the matrix descriptor and the dense descriptors of the
 factorization buffers) is held in a registry until it is destroyed under one process-wide lock;
 the dense descriptors of each solve are created and destroyed under the same lock. All cuDSS work
-is serialized by that lock, runs on the calling task's stream (the handle is moved to it before
-each call) and is synchronized after each call, and the solve mode is set on every solve, so a
-factor can be used from any task. `release_factor!` destroys a factor's
+is serialized by that lock and runs on one stream the extension owns per context (set on the
+handle once, so every analysis binds to it; the calling task is switched to it for the duration of
+each operation), and the solve mode is set on every solve, so a factor can be used from any task. `release_factor!` destroys a factor's
 cuDSS objects and frees its device arrays at once; a factor dropped without release is destroyed
 at the next call into the extension after the GC has collected it.
 """
@@ -59,6 +59,9 @@ const CUDSS_LOCK = ReentrantLock()
 "The extension's own cuDSS handle per CUDA context: created under CUDSS_LOCK, never destroyed."
 const HANDLES = Dict{Any,Any}()
 
+"The extension's own CUDA stream per context: every cuDSS call and every array operation of the extension runs on it."
+const STREAMS = Dict{Any,Any}()
+
 "cuDSS objects of live factors, by factor id, as (context, objects): destroyed only under CUDSS_LOCK."
 const LIVE = Dict{UInt64,Any}()
 
@@ -67,16 +70,25 @@ const DROPPED = UInt64[]
 const DROPPED_LOCK = Threads.SpinLock()
 const NEXT_ID = Threads.Atomic{UInt64}(0)
 
-# Call with CUDSS_LOCK held, in the context the handle is for.
-own_handle(ctx) = get!(() -> CUDSS.cudssCreate(), HANDLES, ctx)
+# Streams. cuDSS data keeps the stream its analysis ran on, so a factor executes there whichever
+# task calls it, and CUDA.jl gives each task its own non-blocking stream. The extension therefore
+# owns one stream per context, sets it on its handle once (so every analysis binds to it), and runs
+# every locked operation with the calling task switched to it (`on_device`): uploads, cuDSS calls,
+# residuals, synchronization, frees and destruction are all ordered on that one stream.
+# Call with CUDSS_LOCK held, in the context.
+own_stream(ctx) = get!(() -> CUDACore.CuStream(), STREAMS, ctx)
+function own_handle(ctx)
+    get!(HANDLES, ctx) do
+        h = CUDSS.cudssCreate()
+        CUDSS.cudssSetStream(h, own_stream(ctx))
+        h
+    end
+end
 
-# CUDA.jl gives each task its own non-blocking stream, which is not ordered with the legacy default
-# stream a fresh cuDSS handle uses. Before each cuDSS call the handle is put on the calling task's
-# stream, so cuDSS work is ordered with the factor's uploads and the residual computations, and
-# synchronizing that stream waits for all of it (as CUDSS.jl's own task handles do).
-bind_stream!(ctx) = CUDSS.cudssSetStream(own_handle(ctx), CUDACore.stream())
+"Run `f` in context `ctx` on the extension's stream for it. Call with CUDSS_LOCK held."
+on_device(f, ctx) = CUDACore.context!(() -> CUDACore.stream!(f, own_stream(ctx)), ctx)
 
-"Wait for the calling task's stream, on which all of this extension's device work runs."
+"Wait for the current stream (the extension's, inside `on_device`)."
 devsync() = CUDACore.synchronize()
 
 finalize_all!(objs) = foreach(o -> (try finalize(o) catch end), objs)
@@ -132,29 +144,34 @@ end
 
 # Call with CUDSS_LOCK held. Destroys one registered set of cuDSS objects (not the handle) in its
 # own context; idempotent.
+# Call with CUDSS_LOCK held. Destroys one registered set of cuDSS objects (not the handle) on its
+# context's stream. Returns false, keeping the entry (and so the objects) rooted, if that fails.
 function destroy!(id::UInt64)
-    entry = pop!(LIVE, id, nothing)
-    entry === nothing && return nothing
+    entry = get(LIVE, id, nothing)
+    entry === nothing && return true
     ctx, objs = entry
     try
-        CUDACore.context!(ctx) do
-            bind_stream!(ctx)
+        on_device(ctx) do
             devsync()
             finalize_all!(objs)
         end
     catch
+        return false
     end
-    return nothing
+    delete!(LIVE, id)
+    return true
 end
 
-# Call with CUDSS_LOCK held: destroy the objects of factors the GC has collected.
+# Call with CUDSS_LOCK held: destroy the objects of factors the GC has collected (those that
+# cannot be destroyed now stay registered and are retried).
 function drain_dropped!()
     ids = lock(DROPPED_LOCK) do
         ids = copy(DROPPED)
         empty!(DROPPED)
         ids
     end
-    foreach(destroy!, ids)
+    failed = filter(id -> !destroy!(id), ids)
+    isempty(failed) || lock(() -> append!(DROPPED, failed), DROPPED_LOCK)
     return nothing
 end
 
@@ -163,15 +180,18 @@ end
 function release_cudss!(f::CudssFactor)
     f.released && return nothing
     f.released = true
-    destroy!(f.id)
-    try
-        CUDACore.context!(f.ctx) do
-            free_device_matrix!(f.stored)
-            f.full === f.stored || free_device_matrix!(f.full)
-            free_device!(f.xbuf)
-            free_device!(f.bbuf)
+    # Device arrays are freed only once the cuDSS objects using them are destroyed; otherwise they
+    # stay referenced by those (still registered) objects.
+    if destroy!(f.id)
+        try
+            on_device(f.ctx) do
+                free_device_matrix!(f.stored)
+                f.full === f.stored || free_device_matrix!(f.full)
+                free_device!(f.xbuf)
+                free_device!(f.bbuf)
+            end
+        catch
         end
-    catch
     end
     f.solver = nothing
     f.stored = nothing
@@ -187,7 +207,6 @@ end
 # CUDSS_LOCK held, in the factor's context. A failure releases the factor before rethrowing.
 function factorize!(f::CudssFactor; analyse::Bool)
     try
-        bind_stream!(f.ctx)
         devsync()
         analyse && CUDSS.cudss("analysis", f.solver, f.xdesc, f.bdesc; asynchronous=false)
         CUDSS.cudss("factorization", f.solver, f.xdesc, f.bdesc; asynchronous=false)
@@ -213,41 +232,43 @@ function new_factor(A::SparseMatrixCSC{T,Int}, structure::String) where T
     M = storage(A, structure)
     n = size(A, 1)
     colptr, rowval = copy(M.colptr), copy(M.rowval)
+    ctx = CUDACore.context()
     lock(CUDSS_LOCK) do
         drain_dropped!()
-        ctx = CUDACore.context()
-        arrays = Any[]
-        objs = Any[]
-        f = nothing
-        try
-            stored = device(M); push!(arrays, stored)
-            full = structure == "S" ? device(A) : stored
-            full === stored || push!(arrays, full)
-            xbuf = CUDACore.CuVector{T}(undef, n); push!(arrays, xbuf)
-            bbuf = CUDACore.CuVector{T}(undef, n); push!(arrays, bbuf)
-            data = CUDSS.CudssData(own_handle(ctx)); push!(objs, data)
-            config = CUDSS.CudssConfig(); push!(objs, config)
-            matrix = CUDSS.CudssMatrix(stored, structure, structure == "S" ? 'L' : 'F'); push!(objs, matrix)
-            xdesc = CUDSS.CudssMatrix(xbuf); push!(objs, xdesc)
-            bdesc = CUDSS.CudssMatrix(bbuf); push!(objs, bdesc)
-            solver = CUDSS.CudssSolver(matrix, config, data)
-            id = Threads.atomic_add!(NEXT_ID, UInt64(1))
-            f = CudssFactor{T}(solver, structure, stored, full, n, colptr, rowval, xbuf, bbuf,
-                xdesc, bdesc, ctx, -1, false, id)
-            LIVE[id] = (ctx, objs)
-            finalizer(dropped!, f)
-        catch
-            f === nothing || pop!(LIVE, f.id, nothing)
+        on_device(ctx) do
+            arrays = Any[]
+            objs = Any[]
+            f = nothing
             try
-                devsync()
+                stored = device(M); push!(arrays, stored)
+                full = structure == "S" ? device(A) : stored
+                full === stored || push!(arrays, full)
+                xbuf = CUDACore.CuVector{T}(undef, n); push!(arrays, xbuf)
+                bbuf = CUDACore.CuVector{T}(undef, n); push!(arrays, bbuf)
+                data = CUDSS.CudssData(own_handle(ctx)); push!(objs, data)
+                config = CUDSS.CudssConfig(); push!(objs, config)
+                matrix = CUDSS.CudssMatrix(stored, structure, structure == "S" ? 'L' : 'F'); push!(objs, matrix)
+                xdesc = CUDSS.CudssMatrix(xbuf); push!(objs, xdesc)
+                bdesc = CUDSS.CudssMatrix(bbuf); push!(objs, bdesc)
+                solver = CUDSS.CudssSolver(matrix, config, data)
+                id = Threads.atomic_add!(NEXT_ID, UInt64(1))
+                f = CudssFactor{T}(solver, structure, stored, full, n, colptr, rowval, xbuf, bbuf,
+                    xdesc, bdesc, ctx, -1, false, id)
+                LIVE[id] = (ctx, objs)
+                finalizer(dropped!, f)
             catch
+                f === nothing || pop!(LIVE, f.id, nothing)
+                try
+                    devsync()
+                catch
+                end
+                finalize_all!(objs)
+                foreach(a -> (try a isa CUDACore.CuArray ? free_device!(a) : free_device_matrix!(a) catch end), arrays)
+                f === nothing || (f.released = true)
+                rethrow()
             end
-            finalize_all!(objs)
-            foreach(a -> (try a isa CUDACore.CuArray ? free_device!(a) : free_device_matrix!(a) catch end), arrays)
-            f === nothing || (f.released = true)
-            rethrow()
+            factorize!(f; analyse=true)
         end
-        factorize!(f; analyse=true)
     end
 end
 
@@ -260,7 +281,7 @@ function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T}, A::SparseMatrixCSC
     reused = lock(CUDSS_LOCK) do
         drain_dropped!()
         if solver.reuse_analysis && !f.released && f.structure == structure && same_pattern(f, M)
-            CUDACore.context!(f.ctx) do
+            on_device(f.ctx) do
                 old_stored, old_full = f.stored, f.full
                 stored = device(M)
                 full = structure == "S" ? device(A) : stored
@@ -294,17 +315,18 @@ end
 # on every call, so no earlier call (or failure) can leave a stale one; the dense descriptors of
 # this solve are destroyed before the lock is released.
 function raw_solve!(f::CudssFactor, x, b, mode::Char)
-    bind_stream!(f.ctx)
     CUDSS.cudss_set(f.solver, "solve_mode", mode)
     X = CUDSS.CudssMatrix(x)
-    B = CUDSS.CudssMatrix(b)
     try
-        devsync()
-        CUDSS.cudss("solve", f.solver, X, B; asynchronous=false)
-        devsync()
+        B = CUDSS.CudssMatrix(b)
+        try
+            CUDSS.cudss("solve", f.solver, X, B; asynchronous=false)
+            devsync()
+        finally
+            finalize(B)
+        end
     finally
         finalize(X)
-        finalize(B)
     end
     return x
 end
@@ -330,7 +352,7 @@ function checked_solve(solver::DEO.CUDSSSolver, f::CudssFactor{T}, b::Vector{T},
         f.released && throw(ArgumentError("CUDSSSolver: this factorization has been released"))
         length(b) == f.n ||
             throw(DimensionMismatch("CUDSSSolver: right-hand side of length $(length(b)) for a factor of size $(f.n)"))
-        CUDACore.context!(f.ctx) do
+        on_device(f.ctx) do
             bd = CUDACore.CuVector{T}(b)
             x = correction(f, bd, adjoint)
             solver.residual_rtol > 0 || return Array(x)
