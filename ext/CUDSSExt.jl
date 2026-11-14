@@ -28,11 +28,14 @@ numerical factorization. After every factorization cuDSS's device-side `info` is
 the number of perturbed pivots is kept in the factor (`npivots`). A factor whose update or
 factorization fails is released, never left half updated.
 
-CUDSS.jl gives each Julia task its own cuDSS handle and stream, and factors created in one task
-share that handle. All cuDSS work here is therefore serialized by one process-wide lock, the
-solve mode is set on every solve, and the device is synchronized around each cuDSS call, so a
-factor can be used from any task. `release_factor!` destroys the factor's cuDSS objects at once
-(their finalizers, run early and so not again).
+Handles and lifetimes. CUDSS.jl lends each Julia task a cuDSS handle from a pool and takes it back
+when the task is collected, and its objects are destroyed by GC finalizers on any thread. Here
+every factor is built on one handle owned by this extension (one per CUDA context, never
+returned), all cuDSS work is serialized by one process-wide lock with the device synchronized
+around each call, and the solve mode is set on every solve, so a factor can be used from any task.
+Each factor's cuDSS objects are held in a registry and destroyed only under the lock: by
+`release_factor!` at once (together with the factor's device arrays), or, for a factor dropped
+without release, at the next call into the extension after the GC has collected it.
 """
 module CUDSSExt
 
@@ -46,8 +49,25 @@ const CUDACore = CUDSS.CUDACore
 const cuSPARSE = CUDSS.cuSPARSE
 const DEO = DistributedEmitterOpt
 
-"Serializes all cuDSS calls: handles are per task, may be shared by factors, and are not thread safe."
+"Serializes all cuDSS work: the extension's handle is shared by every factor and is not thread safe."
 const CUDSS_LOCK = ReentrantLock()
+
+"The extension's own cuDSS handle per CUDA context: created under CUDSS_LOCK, never destroyed."
+const HANDLES = Dict{Any,Any}()
+
+"cuDSS solvers of live factors, by factor id: their objects are destroyed only under CUDSS_LOCK."
+const LIVE = Dict{UInt64,Any}()
+
+"Ids of factors collected without release_factor! (pushed by finalizers, drained under CUDSS_LOCK)."
+const DROPPED = UInt64[]
+const DROPPED_LOCK = Threads.SpinLock()
+const NEXT_ID = Threads.Atomic{UInt64}(0)
+
+# Call with CUDSS_LOCK held.
+function own_handle()
+    ctx = CUDACore.context()
+    return get!(() -> CUDSS.cudssCreate(), HANDLES, ctx)
+end
 
 "Wait for all device work, whichever stream (task) issued it."
 devsync() = isdefined(CUDACore, :device_synchronize) ? CUDACore.device_synchronize() : CUDACore.synchronize()
@@ -68,6 +88,19 @@ mutable struct CudssFactor{T}
     bbuf::Any
     npivots::Int                # perturbed pivots in the last factorization (-1 if unavailable)
     released::Bool
+    id::UInt64                  # key of its cuDSS solver in LIVE
+end
+
+# Finalizer: never touches the GPU or CUDSS_LOCK; the next locked call destroys the objects.
+function dropped!(f::CudssFactor)
+    f.released && return nothing
+    lock(DROPPED_LOCK)
+    try
+        push!(DROPPED, f.id)
+    finally
+        unlock(DROPPED_LOCK)
+    end
+    return nothing
 end
 
 storage(A::SparseMatrixCSC, structure::String) = structure == "S" ? tril(A) : A
@@ -76,29 +109,62 @@ same_pattern(f::CudssFactor, M::SparseMatrixCSC) =
 
 device(M::SparseMatrixCSC) = cuSPARSE.CuSparseMatrixCSR(M)
 
-# Call with CUDSS_LOCK held. Destroys the cuDSS data, configuration and matrix descriptor now
-# (not the task's handle); idempotent.
+# Call with CUDSS_LOCK held. Destroys the cuDSS data, configuration and matrix descriptor of one
+# registered solver (not the handle); idempotent.
+function destroy!(id::UInt64)
+    s = pop!(LIVE, id, nothing)
+    s === nothing && return nothing
+    try
+        devsync()
+    catch
+    end
+    for obj in (s.data, s.config, s.matrix)
+        try
+            finalize(obj)
+        catch
+        end
+    end
+    return nothing
+end
+
+# Call with CUDSS_LOCK held: destroy the solvers of factors the GC has collected.
+function drain_dropped!()
+    ids = lock(DROPPED_LOCK) do
+        ids = copy(DROPPED)
+        empty!(DROPPED)
+        ids
+    end
+    foreach(destroy!, ids)
+    return nothing
+end
+
+free_device!(a) = (isdefined(CUDACore, :unsafe_free!) && a isa CUDACore.CuArray) && CUDACore.unsafe_free!(a)
+function free_device_matrix!(M)
+    M === nothing && return nothing
+    for name in (:rowPtr, :colVal, :nzVal)
+        hasproperty(M, name) && free_device!(getproperty(M, name))
+    end
+    return nothing
+end
+
+# Call with CUDSS_LOCK held. Destroys the factor's cuDSS objects and frees its device arrays;
+# idempotent.
 function release_cudss!(f::CudssFactor)
     f.released && return nothing
     f.released = true
-    s = f.solver
+    destroy!(f.id)
+    try
+        free_device_matrix!(f.stored)
+        f.full === f.stored || free_device_matrix!(f.full)
+        free_device!(f.xbuf)
+        free_device!(f.bbuf)
+    catch
+    end
     f.solver = nothing
     f.stored = nothing
     f.full = nothing
     f.xbuf = nothing
     f.bbuf = nothing
-    if s !== nothing
-        try
-            devsync()
-        catch
-        end
-        for obj in (s.data, s.config, s.matrix)
-            try
-                finalize(obj)
-            catch
-            end
-        end
-    end
     return nothing
 end
 
@@ -128,12 +194,17 @@ function new_factor(A::SparseMatrixCSC{T,Int}, structure::String) where T
     CUDACore.functional() || error("CUDSSSolver: no usable CUDA GPU (CUDACore.functional() is false)")
     M = storage(A, structure)
     lock(CUDSS_LOCK) do
+        drain_dropped!()
         stored = device(M)
         full = structure == "S" ? device(A) : stored
-        solver = CUDSS.CudssSolver(stored, structure, structure == "S" ? 'L' : 'F')
+        matrix = CUDSS.CudssMatrix(stored, structure, structure == "S" ? 'L' : 'F')
+        solver = CUDSS.CudssSolver(matrix, CUDSS.CudssConfig(), CUDSS.CudssData(own_handle()))
         n = size(A, 1)
+        id = Threads.atomic_add!(NEXT_ID, UInt64(1))
+        LIVE[id] = solver
         f = CudssFactor{T}(solver, structure, stored, full, n, copy(M.colptr), copy(M.rowval),
-            CUDACore.CuVector{T}(undef, n), CUDACore.CuVector{T}(undef, n), -1, false)
+            CUDACore.CuVector{T}(undef, n), CUDACore.CuVector{T}(undef, n), -1, false, id)
+        finalizer(dropped!, f)
         factorize!(f; analyse=true)
     end
 end
@@ -145,6 +216,7 @@ function refactor(solver::DEO.CUDSSSolver, f::CudssFactor{T}, A::SparseMatrixCSC
                   structure::String) where T
     M = storage(A, structure)
     reused = lock(CUDSS_LOCK) do
+        drain_dropped!()
         if solver.reuse_analysis && !f.released && f.structure == structure && same_pattern(f, M)
             stored = device(M)
             full = structure == "S" ? device(A) : stored
@@ -195,6 +267,7 @@ apply(f::CudssFactor, x, adjoint::Bool) = adjoint ? f.full' * x : f.full * x
 # Solve op(A) x = b on the device, check the residual of op(A) itself, refine if needed.
 function checked_solve(solver::DEO.CUDSSSolver, f::CudssFactor{T}, b::Vector{T}, adjoint::Bool) where T
     lock(CUDSS_LOCK) do
+        drain_dropped!()
         f.released && throw(ArgumentError("CUDSSSolver: this factorization has been released"))
         bd = CUDACore.CuVector{T}(b)
         x = correction(f, bd, adjoint)
@@ -218,16 +291,16 @@ end
 # ---------------------------------------------------------------------------
 
 lu!(solver::DEO.CUDSSSolver, A::SparseMatrixCSC{ComplexF64,Int}) =
-    new_factor(A, DEO.checked_cudss_structure(solver, A))
+    new_factor(A, DEO.checked_cudss_structure(DEO.checked_cudss_options(solver), A))
 
 lu!(solver::DEO.CUDSSSolver, factor::CudssFactor{ComplexF64}, A::SparseMatrixCSC{ComplexF64,Int}) =
-    refactor(solver, factor, A, DEO.checked_cudss_structure(solver, A))
+    refactor(solver, factor, A, DEO.checked_cudss_structure(DEO.checked_cudss_options(solver), A))
 
-filter_lu!(::DEO.CUDSSSolver, A::SparseMatrixCSC{Float64,Int}) =
-    new_factor(A, DEO.checked_cudss_filter_structure(A))
+filter_lu!(solver::DEO.CUDSSSolver, A::SparseMatrixCSC{Float64,Int}) =
+    (DEO.checked_cudss_options(solver); new_factor(A, DEO.checked_cudss_filter_structure(A)))
 
 filter_lu!(solver::DEO.CUDSSSolver, factor::CudssFactor{Float64}, A::SparseMatrixCSC{Float64,Int}) =
-    refactor(solver, factor, A, DEO.checked_cudss_filter_structure(A))
+    refactor(DEO.checked_cudss_options(solver), factor, A, DEO.checked_cudss_filter_structure(A))
 
 solve!(solver::DEO.CUDSSSolver, factor::CudssFactor{T}, b::Vector{T}) where T =
     checked_solve(solver, factor, b, false)

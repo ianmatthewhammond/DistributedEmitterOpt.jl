@@ -55,6 +55,15 @@ function checked_cudss_structure(solver::CUDSSSolver, A)
     return defect <= SYMMETRY_RTOL ? "S" : "G"
 end
 
+"Validate a CUDSSSolver's options (a finite residual_rtol ≥ 0, refine_steps ≥ 0); returns the solver."
+function checked_cudss_options(solver::CUDSSSolver)
+    (isfinite(solver.residual_rtol) && solver.residual_rtol >= 0) ||
+        throw(ArgumentError("CUDSSSolver: residual_rtol must be finite and ≥ 0 (0 disables the check), got $(solver.residual_rtol)"))
+    solver.refine_steps >= 0 ||
+        throw(ArgumentError("CUDSSSolver: refine_steps must be ≥ 0, got $(solver.refine_steps)"))
+    return solver
+end
+
 "Real filter matrices: LDLᵀ when symmetric, general LDU otherwise."
 checked_cudss_filter_structure(A) = symmetry_defect(A) <= SYMMETRY_RTOL ? "S" : "G"
 

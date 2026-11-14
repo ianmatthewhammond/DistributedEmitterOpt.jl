@@ -38,6 +38,9 @@ end
     mumps = Base.get_extension(DistributedEmitterOpt, :MUMPSExt) !== nothing
     pardiso = Base.get_extension(DistributedEmitterOpt, :PardisoExt) !== nothing && Pardiso.mkl_is_available()
     cudss = Base.get_extension(DistributedEmitterOpt, :CUDSSExt) !== nothing && CUDSS.CUDACore.functional()
+    cudss_loaded = isdefined(@__MODULE__, :CUDSS) && CUDSS.CUDACore.functional()
+    (cudss_loaded || get(ENV, "DEO_REQUIRE_CUDSS", "0") == "1") && !cudss &&
+        error("CUDSSSolver is required (DEO_REQUIRE_CUDSS=1, or CUDSS.jl with a GPU is loaded) but the CUDSSExt extension is not available")
     println("EXTENSIONS MUMPS=$mumps Pardiso=$pardiso CUDSS=$cudss")
 
     backends = Any[("UMFPACK", UmfpackSolver())]

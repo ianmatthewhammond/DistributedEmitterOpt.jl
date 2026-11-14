@@ -9,6 +9,9 @@ include("oblique_common.jl")
 Base.find_package("CUDSS") !== nothing && @eval using CUDSS
 
 cudss_gpu_ready() = Base.get_extension(DEO, :CUDSSExt) !== nothing && CUDSS.CUDACore.functional()
+if isdefined(@__MODULE__, :CUDSS) && CUDSS.CUDACore.functional() && Base.get_extension(DEO, :CUDSSExt) === nothing
+    error("CUDSS.jl and a CUDA GPU are available, but the CUDSSExt extension did not load")
+end
 
 # The shortcut adjoint, kept as a negative control: exact only for complex symmetric matrices.
 struct CUDSSShortcutSolver <: DEO.AbstractSolver end

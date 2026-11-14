@@ -13,6 +13,10 @@ Base.find_package("CUDSS") !== nothing && @eval using CUDSS
 
 cudss_ready() = Base.get_extension(DEO, :CUDSSExt) !== nothing && CUDSS.CUDACore.functional()
 cudss_required() = get(ENV, "DEO_REQUIRE_CUDSS", "0") == "1"
+# CUDSS.jl installed and a GPU working, but no extension: a broken load, never a skip.
+if isdefined(@__MODULE__, :CUDSS) && CUDSS.CUDACore.functional() && Base.get_extension(DEO, :CUDSSExt) === nothing
+    error("CUDSS.jl and a CUDA GPU are available, but the CUDSSExt extension did not load")
+end
 
 # A sparse, diagonally dominant complex matrix; `symmetric` makes it A = Aᵀ (not Hermitian).
 function cudss_test_matrix(rng, n; symmetric::Bool, T=ComplexF64)
@@ -39,7 +43,8 @@ else
         b = rand(rng, ComplexF64, n)
         f = DEO.lu!(solver, A)
         @test f.structure == "S"
-        @test f.npivots isa Int
+        @test f.npivots == -1 || f.npivots >= 0
+        println("CUDSS npivots (symmetric test matrix): ", f.npivots)
         @test cudss_relerr(DEO.solve!(solver, f, b), Matrix(A) \ b) < 1e-12
         @test cudss_relerr(DEO.solve_adjoint!(solver, f, b), Matrix(A)' \ b) < 1e-12
 
@@ -136,6 +141,45 @@ else
         g3 = DEO.lu!(solver, g2, B2)
         @test g3 !== g2 && !g3.released
         @test cudss_relerr(DEO.solve!(solver, g3, b), Matrix(B2) \ b) < 1e-12
+
+        # Invalid options are refused, not silently turned into "no check".
+        @test_throws ArgumentError DEO.lu!(CUDSSSolver(residual_rtol=NaN), A)
+        @test_throws ArgumentError DEO.lu!(CUDSSSolver(residual_rtol=-1.0), A)
+        @test_throws ArgumentError DEO.lu!(CUDSSSolver(refine_steps=-1), A)
+        @test_throws ArgumentError DEO.filter_lu!(CUDSSSolver(residual_rtol=Inf), F)
+
+        # Ownership: a factor built in a task that has finished (and been collected) still works,
+        # and factors used from several tasks at once give correct answers.
+        ext = Base.get_extension(DEO, :CUDSSExt)
+        ft = fetch(Threads.@spawn DEO.lu!(solver, A2))
+        GC.gc(true); GC.gc(true)
+        @test cudss_relerr(DEO.solve!(solver, ft, b), Matrix(A2) \ b) < 1e-12
+        @test cudss_relerr(DEO.solve_adjoint!(solver, ft, b), Matrix(A2)' \ b) < 1e-12
+        work = [Threads.@spawn begin
+                    M = isodd(k) ? A2 : B2
+                    fk = DEO.lu!(solver, M)
+                    e1 = cudss_relerr(DEO.solve!(solver, fk, b), Matrix(M) \ b)
+                    e2 = cudss_relerr(DEO.solve_adjoint!(solver, fk, b), Matrix(M)' \ b)
+                    DEO.release_factor!(solver, fk)
+                    max(e1, e2)
+                end for k in 1:4]
+        @test maximum(fetch.(work)) < 1e-12
+
+        # Lifetimes: release removes the factor's solver from the registry at once; factors dropped
+        # without release are destroyed under the lock at a later call once the GC collects them.
+        @test haskey(ext.LIVE, ft.id)
+        DEO.release_factor!(solver, ft)
+        @test !haskey(ext.LIVE, ft.id) && ft.solver === nothing && ft.stored === nothing
+        base = length(ext.LIVE)
+        for _ in 1:3
+            DEO.lu!(solver, A2)                         # dropped at once
+        end
+        @test length(ext.LIVE) == base + 3
+        GC.gc(true); GC.gc(true); GC.gc(true)
+        keep = DEO.lu!(solver, A2)                      # drains whatever the GC has collected
+        println("CUDSS registry after dropping 3 factors and collecting: ", length(ext.LIVE) - base, " (was 4)")
+        @test length(ext.LIVE) < base + 4
+        DEO.release_factor!(solver, keep)
 
         # The residual check is on: a tolerance below roundoff with no refinement must throw.
         strict = CUDSSSolver(residual_rtol=1e-30, refine_steps=0)
