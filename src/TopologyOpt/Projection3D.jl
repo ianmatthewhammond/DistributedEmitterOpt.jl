@@ -202,6 +202,9 @@ function dpt_dpf_field(v, pf, control, trian=nothing)
         return ((p, ∇p, q, ∇q, xx) ->
                 dpt_dpf_sidewall(p, ∇p, q, ∇q, xx[3]; control)) ∘ (v, ∇(v), pf, ∇pf, x)
     end
+    # A plain function of position (legacy foundry mode) keeps the per-test-function composition:
+    # only there does Gridap turn the function into a field alongside the basis.
+    pf isa Function && return ((p, ∇p, q, ∇q) -> dpt_dpf(p, ∇p, q, ∇q; control)) ∘ (v, ∇(v), pf, ∇pf)
     # dpt/dpf is linear in the test function: a·v + c·(∇v⋅∇pf), with a and c functions of pf alone.
     # Composing them separately evaluates the projection derivative once per quadrature point
     # instead of once per test function and point.

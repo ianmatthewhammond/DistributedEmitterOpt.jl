@@ -18,13 +18,16 @@
 # 2. Split assembly. A(pt) = A_bg + A_d(pt), where only
 #        A_d(pt) = -k² ∫ v·(ε_m(pt) u) dΩ_design
 #    depends on the design. A_bg is obtained once per (simulation, physical
-#    parameters) as A(pt₀) − A_d(pt₀) from the ordinary assembly, so it holds every
-#    design-independent term of whichever formulation is in use (legacy, Bloch, PML)
-#    without restating it here. Afterwards an evaluation computes the element matrices
-#    of A_d (threaded) and gathers them straight into a copy of A_bg through an index
-#    map built once. No thread holds a copy of the matrix. The result has A_bg's
-#    sparsity pattern on every evaluation, so a solver's symbolic analysis stays valid.
-#    The second evaluation of each plan is checked against the ordinary assembly.
+#    parameters) from the ordinary assembly at the zero design, A(0) − A_d(0), so it
+#    holds every design-independent term of whichever formulation is in use (legacy,
+#    Bloch, PML) without restating it here; with a material model that vanishes at
+#    zero density, A_d(0) is zero and nothing is lost in the subtraction. Afterwards an
+#    evaluation computes the element matrices of A_d (threaded) and gathers them
+#    straight into a copy of A_bg through an index map built once. No thread holds a
+#    copy of the matrix. The result has A_bg's sparsity pattern on every evaluation, so
+#    a solver's symbolic analysis stays valid. Each plan is checked against the
+#    ordinary assembly when it is built, is used by one task at a time, and is rebuilt
+#    when the simulation's spaces or measures are replaced.
 #
 # Results differ from the serial ones only by the order of floating-point additions.
 # Switches: THREADED[], SPLIT_ASSEMBLY[]; `clear_assembly_caches!()` frees the memory.
@@ -112,7 +115,10 @@ function _sum_cells(cache, a, cells, s::T) where {T}
     return s
 end
 
-function Base.sum(a::LazyArray{G,T,1}) where {G,T<:Number}
+"Element types the threaded loops handle; anything else goes to Gridap's own loop."
+const ThreadedScalar = Union{Float32,Float64,ComplexF32,ComplexF64}
+
+function Base.sum(a::LazyArray{G,T,1}) where {G,T<:ThreadedScalar}
     n = length(a)
     (use_threads(n) && isconcretetype(T)) || return lazy_sum(array_cache(a), a)
     ranges = chunk_ranges(n)
@@ -120,7 +126,11 @@ function Base.sum(a::LazyArray{G,T,1}) where {G,T<:Number}
     foreach_chunk(ranges) do i, r
         parts[i] = _sum_chunk(a, r)
     end
-    return sum(parts)
+    total = zero(T)
+    for part in parts
+        total += part
+    end
+    return total
 end
 
 # ── Vector assembly ──────────────────────────────────────────────────────────
@@ -154,11 +164,11 @@ function _serial_vector_term!(b, cellvec, cellids)
 end
 
 _plain_vector_term(cellvec, cellids) =
-    testitem(cellvec) isa AbstractVector{<:Number} && testitem(cellids) isa AbstractVector{<:Integer}
+    testitem(cellvec) isa AbstractVector{<:ThreadedScalar} && testitem(cellids) isa AbstractVector{<:Integer}
 
 function Gridap.FESpaces.numeric_loop_vector!(b::Vector{T}, a::GenericSparseMatrixAssembler,
-    vecdata) where {T<:Number}
-    if !(THREADED[] && thread_chunks() > 1)
+    vecdata) where {T<:ThreadedScalar}
+    if !(THREADED[] && thread_chunks() > 1 && isconcretetype(T))
         return invoke(Gridap.FESpaces.numeric_loop_vector!, Tuple{Any,SparseMatrixAssembler,Any}, b, a, vecdata)
     end
     strategy = get_assembly_strategy(a)
@@ -183,6 +193,11 @@ end
 
 # ── Split Maxwell assembly ───────────────────────────────────────────────────
 
+"Raised while building a plan for a design term this path does not handle; the caller assembles directly."
+struct SplitUnsupported <: Exception
+    why::String
+end
+
 """
 Everything needed to assemble the Maxwell matrix of one (simulation, physical
 parameters) pair from its design term alone. See the top of this file.
@@ -190,13 +205,15 @@ parameters) pair from its design term alone. See the top of this file.
 mutable struct SplitMaxwellPlan
     sim::Any                                 # held so the simulation cannot be collected and its identity reused
     key::Tuple
+    inputs::Tuple                            # the simulation's spaces and measures when the plan was built
+    usable::Bool                             # false: this pair is assembled directly
     A_bg::SparseMatrixCSC{ComplexF64,Int}    # design-independent part
     nloc::Int                                # entries of one element matrix
     ptr::Vector{Int}                         # contributions to nzval[p] are E[src[ptr[p]:ptr[p+1]-1]]
     src::Union{Vector{Int32},Vector{Int}}    # linear indices into E (32-bit whenever they fit)
     E::Matrix{ComplexF64}                    # nloc × (design cells): element matrices of the design term
     ncalls::Int
-    checked::Bool
+    lock::ReentrantLock                      # one task at a time fills E and gathers from it
 end
 
 const _PLAN_LOCK = ReentrantLock()
@@ -217,24 +234,30 @@ end
 # Every field of the physical parameters except the polarization, which only selects the source.
 _phys_key(phys) = Tuple(getfield(phys, f) for f in fieldnames(typeof(phys)) if f !== :polarization)
 
-function _find_plan(sim, key)
-    lock(_PLAN_LOCK) do
-        for p in _PLANS
-            p.sim === sim && isequal(p.key, key) && return p
-        end
-        return nothing
-    end
-end
+# The objects of a simulation the matrix is assembled from. A plan built from one set is not used
+# for another: a simulation is mutable, and replacing a space or a measure changes the matrix.
+const _SIM_INPUTS = (:U, :V, :Ω, :dΩ, :Ω_design, :dΩ_design, :dS_top, :dS_bottom, :dΩ_substrate, :dΩ_raman)
+_sim_inputs(sim) = Tuple(hasproperty(sim, f) ? getproperty(sim, f) : nothing for f in _SIM_INPUTS)
+_same_inputs(a::Tuple, b::Tuple) = length(a) == length(b) && all(x === y for (x, y) in zip(a, b))
 
-function _store_plan!(plan::SplitMaxwellPlan)
+"The plan of (sim, key), created by `build` if there is none or if the simulation's inputs changed."
+function _plan_for!(build::F, sim, key) where {F}
     lock(_PLAN_LOCK) do
+        inputs = _sim_inputs(sim)
+        for (i, p) in enumerate(_PLANS)
+            p.sim === sim && isequal(p.key, key) || continue
+            _same_inputs(p.inputs, inputs) && return p
+            deleteat!(_PLANS, i)             # the simulation was modified: rebuild
+            break
+        end
+        plan = build(inputs)
         length(_PLANS) >= MAX_SPLIT_PLANS[] && popfirst!(_PLANS)
         push!(_PLANS, plan)
+        return plan
     end
-    return plan
 end
 
-"Cell matrices, row ids and column ids of the design term −k² ∫ v·(ε_m(pt) u) dΩ_design."
+"Cell matrices, row ids and column ids of the design term −k² ∫ v·(ε_m(pt) u) dΩ_design, or nothing."
 function _design_term_data(pt, sim, phys)
     εₘ = (p -> ε_design_wf(p, phys)) ∘ pt
     k = phys.ω
@@ -257,7 +280,7 @@ function _element_cells!(E::Matrix{ComplexF64}, cache, cellmat, cells)
     nloc = size(E, 1)
     for cell in cells
         m = getindex!(cache, cellmat, cell)
-        length(m) == nloc || error("split assembly: element matrices of different sizes")
+        length(m) == nloc || throw(SplitUnsupported("element matrices of different sizes"))
         @inbounds for i in 1:nloc
             E[i, cell] = m[i]
         end
@@ -301,12 +324,12 @@ function _positions_cells!(where_::Matrix{Int}, A, rows_cache, cols_cache, rows,
         rs = getindex!(rows_cache, rows, cell)
         cs = getindex!(cols_cache, cols, cell)
         nr = length(rs)
-        length(rs) * length(cs) == size(where_, 1) || error("split assembly: cells with different numbers of unknowns")
+        length(rs) * length(cs) == size(where_, 1) || throw(SplitUnsupported("cells with different numbers of unknowns"))
         @inbounds for j in eachindex(cs), i in eachindex(rs)
             r = Int(rs[i])
             c = Int(cs[j])
             p = (r > 0 && c > 0) ? _nz_position(A, r, c) : 0
-            (r > 0 && c > 0 && p == 0) && error("split assembly: a design-term entry is outside the matrix pattern")
+            (r > 0 && c > 0 && p == 0) && throw(SplitUnsupported("a design-term entry is outside the matrix pattern"))
             where_[(j-1)*nr+i, cell] = p
         end
     end
@@ -318,8 +341,17 @@ function _gather_map(A::SparseMatrixCSC, rows, cols, nloc::Int)
     ncell = length(rows)
     where_ = Matrix{Int}(undef, nloc, ncell)
     ranges = use_threads(ncell) ? chunk_ranges(ncell) : [1:ncell]
-    foreach_chunk(ranges) do _, r
-        _positions_chunk!(where_, A, rows, cols, r)
+    failures = Vector{Any}(nothing, length(ranges))
+    foreach_chunk(ranges) do i, r
+        try
+            _positions_chunk!(where_, A, rows, cols, r)
+        catch err
+            err isa SplitUnsupported || rethrow()
+            failures[i] = err
+        end
+    end
+    for f in failures
+        f === nothing || throw(f)
     end
     ptr = zeros(Int, nnz(A) + 1)
     @inbounds for p in where_
@@ -373,57 +405,73 @@ function _parallel_copy(v::Vector)
 end
 
 "Whether `assemble_maxwell` may use the split assembly for these parameters."
-split_assembly_applies(sim, phys) = SPLIT_ASSEMBLY[] && hasproperty(sim, :dΩ_design)
+split_assembly_applies(sim, phys) =
+    SPLIT_ASSEMBLY[] && hasproperty(sim, :dΩ_design) && hasproperty(sim, :Ω) && hasproperty(sim, :U) && hasproperty(sim, :V)
+
+_unusable_plan(sim, key, inputs) = SplitMaxwellPlan(sim, key, inputs, false, spzeros(ComplexF64, 0, 0), 0, Int[], Int32[],
+    Matrix{ComplexF64}(undef, 0, 0), 0, ReentrantLock())
+
+# A_bg from the ordinary assembly at the zero design, minus the design term there (zero itself whenever
+# the material model vanishes at zero density, so nothing is lost in the subtraction).
+function _build_plan(sim, key, inputs, phys, direct::F) where {F}
+    pt0 = CellField(0.0, sim.Ω)
+    data = _design_term_data(pt0, sim, phys)
+    data === nothing && return _unusable_plan(sim, key, inputs)
+    cellmat, rows, cols = data
+    A0 = direct(pt0, sim, phys)
+    A0 isa SparseMatrixCSC{ComplexF64,Int} || return _unusable_plan(sim, key, inputs)
+    nloc = length(testitem(cellmat))
+    try
+        ptr, src = _gather_map(A0, rows, cols, nloc)
+        E = Matrix{ComplexF64}(undef, nloc, length(cellmat))
+        _element_matrices!(E, cellmat)
+        bg = similar(A0.nzval)
+        _gather!(bg, A0.nzval, ptr, src, E, -1.0)
+        A_bg = SparseMatrixCSC(size(A0, 1), size(A0, 2), A0.colptr, A0.rowval, bg)
+        return SplitMaxwellPlan(sim, key, inputs, true, A_bg, nloc, ptr, src, E, 0, ReentrantLock())
+    catch err
+        err isa SplitUnsupported || rethrow()
+        log_warn(:assembly, "split Maxwell assembly does not apply to this problem; assembling directly", reason=err.why)
+        return _unusable_plan(sim, key, inputs)
+    end
+end
 
 """
     assemble_maxwell_split(pt, sim, phys, direct) -> SparseMatrixCSC or nothing
 
 Maxwell matrix from the cached design-independent part plus the design term.
-`direct(pt, sim, phys)` is the ordinary assembly; it is called on the first
-evaluation of a (simulation, parameters) pair, to build the plan, and once more on
-the second, to check the split result. Returns `nothing` when the design term has a
-shape this path does not handle, and the caller then assembles directly.
+`direct(pt, sim, phys)` is the ordinary assembly. It is called at the zero design when
+the plan of a (simulation, parameters) pair is built, and once more on that pair's
+first evaluation, to check the split result. Returns `nothing` when the design term
+has a shape this path does not handle; the caller then assembles directly.
 """
 function assemble_maxwell_split(pt, sim, phys, direct::F) where {F}
     key = _phys_key(phys)
-    plan = _find_plan(sim, key)
+    plan = _plan_for!(inputs -> _build_plan(sim, key, inputs, phys, direct), sim, key)
+    plan.usable || return nothing
     data = _design_term_data(pt, sim, phys)
     data === nothing && return nothing
-    cellmat, rows, cols = data
-    if plan === nothing
-        A = direct(pt, sim, phys)
-        A isa SparseMatrixCSC{ComplexF64,Int} || return A
-        nloc = length(testitem(cellmat))
-        ptr, src = _gather_map(A, rows, cols, nloc)
-        E = Matrix{ComplexF64}(undef, nloc, length(cellmat))
-        _element_matrices!(E, cellmat)
-        bg = similar(A.nzval)
-        _gather!(bg, A.nzval, ptr, src, E, -1.0)          # A_bg = A(pt₀) − A_d(pt₀)
-        A_bg = SparseMatrixCSC(size(A, 1), size(A, 2), copy(A.colptr), copy(A.rowval), bg)
-        _store_plan!(SplitMaxwellPlan(sim, key, A_bg, nloc, ptr, src, E, 1, false))
-        return A
-    end
-    size(plan.E, 2) == length(cellmat) || error("split assembly: the design region changed under a cached plan")
-    _element_matrices!(plan.E, cellmat)
+    cellmat, _, _ = data
+    size(plan.E, 2) == length(cellmat) || return nothing
     bg = plan.A_bg
     nz = Vector{ComplexF64}(undef, nnz(bg))
-    _gather!(nz, bg.nzval, plan.ptr, plan.src, plan.E, 1.0)
+    first_use = lock(plan.lock) do
+        _element_matrices!(plan.E, cellmat)
+        _gather!(nz, bg.nzval, plan.ptr, plan.src, plan.E, 1.0)
+        plan.ncalls += 1
+        plan.ncalls == 1
+    end
     A = SparseMatrixCSC(size(bg, 1), size(bg, 2), _parallel_copy(bg.colptr), _parallel_copy(bg.rowval), nz)
-    plan.ncalls += 1
-    if !plan.checked
+    if first_use
         ref = direct(pt, sim, phys)
         same = ref.colptr == A.colptr && ref.rowval == A.rowval
         err = same ? norm(ref.nzval - A.nzval) / norm(ref.nzval) : Inf
         if !(err <= 1e-12)
-            lock(_PLAN_LOCK) do
-                filter!(p -> p !== plan, _PLANS)
-            end
-            SPLIT_ASSEMBLY[] = false
-            log_warn(:assembly, "split Maxwell assembly disagrees with the ordinary assembly; split assembly is now off",
+            plan.usable = false
+            log_warn(:assembly, "split Maxwell assembly disagrees with the ordinary assembly; this problem is assembled directly from now on",
                 rel_error=err, same_pattern=same)
             return ref
         end
-        plan.checked = true
     end
     return A
 end
