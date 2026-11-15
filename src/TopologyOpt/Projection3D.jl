@@ -202,7 +202,25 @@ function dpt_dpf_field(v, pf, control, trian=nothing)
         return ((p, ∇p, q, ∇q, xx) ->
                 dpt_dpf_sidewall(p, ∇p, q, ∇q, xx[3]; control)) ∘ (v, ∇(v), pf, ∇pf, x)
     end
-    return ((p, ∇p, q, ∇q) -> dpt_dpf(p, ∇p, q, ∇q; control)) ∘ (v, ∇(v), pf, ∇pf)
+    # dpt/dpf is linear in the test function: a·v + c·(∇v⋅∇pf), with a and c functions of pf alone.
+    # Composing them separately evaluates the projection derivative once per quadrature point
+    # instead of once per test function and point.
+    R, β, η = control.R_ssp, control.β, control.η
+    a = ((q, ∇q) -> DSP_dpf(1.0, q, ∇q; R, β, η)) ∘ (pf, ∇pf)
+    c = ((q, ∇q) -> DSP_d∇pf_coefficient(q, ∇q; R, β, η)) ∘ (pf, ∇pf)
+    return v * a + (∇(v) ⋅ ∇pf) * c
+end
+
+"""
+    DSP_d∇pf_coefficient(ρ̃, ∇ρ̃; R, β, η) -> Float64
+
+`DSP_d∇pf(∇p, ρ̃, ∇ρ̃)` depends on `∇p` only through `∇p ⋅ ∇ρ̃`; this is its value per unit of
+that product, so that `DSP_d∇pf(∇p, ρ̃, ∇ρ̃) == DSP_d∇pf_coefficient(ρ̃, ∇ρ̃) * (∇p ⋅ ∇ρ̃)`.
+"""
+function DSP_d∇pf_coefficient(ρ̃::Real, ∇ρ̃; R::Float64, β::Float64, η::Float64)
+    n2 = ∇ρ̃ ⋅ ∇ρ̃
+    n2 < 1e-16 && return 0.0          # DSP_d∇pf is zero below a gradient norm of 1e-8
+    return float(DSP_d∇pf(∇ρ̃ / n2, ρ̃, ∇ρ̃; R, β, η))
 end
 
 """

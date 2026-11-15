@@ -62,6 +62,7 @@ include("Types/OptimizationProblem.jl")
 # ---------------------------------------------------------------------------
 
 include("Physics/Materials.jl")
+include("Utils/ThreadedAssembly.jl")
 include("Physics/Maxwell.jl")
 include("Physics/Eigen.jl")
 include("Physics/SERS.jl")
@@ -154,6 +155,7 @@ export Control, tanh_projection, Threshold
 export AbstractSolver, SolverCache, SolverCachePool, UmfpackSolver, MUMPSSolver, PardisoSolver, CUDSSSolver
 export get_cache!, clear_maxwell_factors!, clear_eigen_factors!
 export Simulation, build_simulation
+export clear_assembly_caches!
 
 # Physics
 export refindex, complex_index, plasmon_period

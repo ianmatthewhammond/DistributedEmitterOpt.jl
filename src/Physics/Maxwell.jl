@@ -178,6 +178,20 @@ With `phys.pml` set, the background terms carry the z-stretch tensors
 A = ∫ (∇×v)·(Λν ∇×u) dΩ - k²∫ ε₀ v·(Λε u) dΩ - k²∫ εₘ(p) v·u dΩ_d + ABC
 """
 function assemble_maxwell(pt, sim, phys::PhysicalParams)
+    # Design-independent terms once, design term per evaluation (Utils/ThreadedAssembly.jl).
+    if split_assembly_applies(sim, phys)
+        A = assemble_maxwell_split(pt, sim, phys, assemble_maxwell_direct)
+        A === nothing || return A
+    end
+    return assemble_maxwell_direct(pt, sim, phys)
+end
+
+"""
+    assemble_maxwell_direct(pt, sim, phys) -> SparseMatrix
+
+`assemble_maxwell` with every term assembled from scratch.
+"""
+function assemble_maxwell_direct(pt, sim, phys::PhysicalParams)
     phys.formulation == :bloch && return assemble_bloch_maxwell(pt, sim, phys)
     (phys.θ == 0 && phys.tilt_x == 0) || throw(ArgumentError("assemble_maxwell: legacy formulation is normal-incidence only"))
     isnothing(phys.pml) || return assemble_maxwell_pml(pt, sim, phys)
