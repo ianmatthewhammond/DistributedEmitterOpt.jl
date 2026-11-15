@@ -24,8 +24,9 @@ the design. Start Julia with threads (`julia -t N`, or `JULIA_NUM_THREADS`); not
 
 Results differ from the serial ones only by the order of floating-point additions
 (`test/threaded_assembly_tests.jl`: objectives to 1e-10, gradients to 1e-8, matrices to 1e-13).
-The first evaluation of every split plan is compared with the ordinary assembly; on a mismatch
-that problem is assembled directly from then on, with a logged warning. A design term the split
+The first evaluation of every split plan is compared with the ordinary assembly before any split
+result is returned; on a mismatch that problem is assembled directly from then on, with a logged
+warning. A design term the split
 path does not handle (cells with different numbers of unknowns, block terms) is also assembled
 directly. The first evaluation therefore costs two ordinary assemblies per field configuration.
 
@@ -37,7 +38,15 @@ directly. The first evaluation therefore costs two ordinary assemblies per field
 | `DistributedEmitterOpt.SPLIT_ASSEMBLY[]` | `true` | assemble only the design term per evaluation |
 | `DistributedEmitterOpt.THREAD_MIN_CELLS[]` | `2000` | shorter loops stay serial |
 | `DistributedEmitterOpt.THREAD_CHUNKS[]` | `0` | chunks per loop; 0 means one per thread |
+| `DistributedEmitterOpt.SPLIT_VERIFY_EVERY[]` | `0` | also compare with the ordinary assembly on every n-th use |
 | `clear_assembly_caches!()` | | frees the buffers and the split plans |
+
+## When to clear the caches
+
+A split plan is rebuilt by itself when one of the simulation's spaces, triangulations or measures
+is **replaced** by another object. It cannot see an object that is modified **in place** (quadrature
+weights overwritten, node coordinates moved). After such a change call `clear_assembly_caches!()`
+or `invalidate_maxwell_cache!(pool)`, which now clears the plans as well as the factorizations.
 
 ## Memory
 

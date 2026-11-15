@@ -98,7 +98,7 @@ end
                 end
             end
             @test length(TA._PLANS) == length(all_configs(prob.pde))
-            @test all(p -> p.usable && p.ncalls == 3, TA._PLANS)
+            @test all(p -> p.usable && p.verified && p.ncalls == 3, TA._PLANS)
             @test TA.SPLIT_ASSEMBLY[]
         end
     end
@@ -126,6 +126,37 @@ end
         end
     end
 
+    @testset "no split result escapes a failed check" begin
+        prob = build_test_problem()
+        sim0 = default_sim(prob.sim)
+        fc = first(all_configs(prob.pde))
+        sim_fc = sim_for(prob.sim, fc)
+        phys = TA.build_phys_params(fc, prob.pde.env, sim_fc; α=prob.pde.α_loss)
+        rng = MersenneTwister(21)
+        pts = [TA.project_ssp(FEFunction(sim0.Pf, rand(rng, num_free_dofs(sim0.Pf))), prob.control, sim0.Ω) for _ in 1:6]
+        # An "ordinary assembly" that disagrees with the split one away from the zero design, and is
+        # slow enough for the other tasks to arrive while the first is still checking.
+        wrong = function (pt, sim, phys)
+            A = TA.assemble_maxwell_direct(pt, sim, phys)
+            pt isa Gridap.CellData.GenericCellField && return A        # the zero design of the plan
+            sleep(0.2)
+            return 2 * A
+        end
+        with_assembly(threaded=true, split=true, chunks=3, min_cells=1) do
+            got = Vector{Any}(undef, length(pts))
+            @sync for k in eachindex(pts)                              # cold: nothing built or checked yet
+                Threads.@spawn (got[k] = TA.assemble_maxwell_split(pts[k], sim_fc, phys, wrong))
+            end
+            refs = [2 * TA.assemble_maxwell_direct(pt, sim_fc, phys) for pt in pts]
+            # Each caller gets either the rejected check's reference or `nothing` (assemble directly);
+            # never the split matrix that the check rejected.
+            @test all(got[k] === nothing || norm(got[k].nzval - refs[k].nzval) <= 1e-13 * norm(refs[k].nzval) for k in eachindex(pts))
+            @test count(!isnothing, got) == 1
+            @test !only(TA._PLANS).usable
+            @test TA.assemble_maxwell_split(pts[1], sim_fc, phys, wrong) === nothing
+        end
+    end
+
     @testset "a modified simulation gets a new plan" begin
         prob = build_test_problem()
         sim0 = default_sim(prob.sim)
@@ -140,13 +171,29 @@ end
                 TA.assemble_maxwell(pt, sim_fc, phys)
                 first_plan = only(TA._PLANS)
                 sim_fc.dΩ_design = Measure(sim_fc.Ω_design, 2)      # a different quadrature: a different matrix
-                A = TA.assemble_maxwell(pt, sim_fc, phys)
                 B = TA.assemble_maxwell_direct(pt, sim_fc, phys)
+                for _ in 1:2                                          # the checked first use, then an unchecked one
+                    A = TA.assemble_maxwell(pt, sim_fc, phys)
+                    @test norm(A.nzval - B.nzval) <= 1e-13 * norm(B.nzval)
+                end
                 @test only(TA._PLANS) !== first_plan
-                @test norm(A.nzval - B.nzval) <= 1e-13 * norm(B.nzval)
+                @test only(TA._PLANS).usable && only(TA._PLANS).verified && only(TA._PLANS).ncalls == 2
+                TA.invalidate_maxwell_cache!(default_pool(prob.pool))  # the hook for in-place changes
+                @test isempty(TA._PLANS)
             finally
                 sim_fc.dΩ_design = old_measure
             end
+        end
+    end
+
+    @testset "an exception in a chunk arrives unwrapped" begin
+        @test_throws TA.SplitUnsupported TA.foreach_chunk(TA.chunk_ranges(8, 4)) do i, _
+            i == 3 && throw(TA.SplitUnsupported("probe"))
+        end
+        E = Matrix{ComplexF64}(undef, 4, 6)
+        ragged = Gridap.Arrays.lazy_map(i -> ones(ComplexF64, isodd(i) ? 2 : 3, 2), collect(1:6))
+        with_assembly(threaded=true, split=true, chunks=3, min_cells=1) do
+            @test_throws TA.SplitUnsupported TA._element_matrices!(E, ragged)
         end
     end
 
@@ -187,6 +234,13 @@ end
             @test worst <= 1e-12 * max(scale, 1.0)
             name in ("random", "flat") && @test scale > 0
         end
+        # A plain function of position (legacy foundry mode) keeps the per-test-function composition.
+        pf_fun = x -> 0.5 + 0.3 * sin(x[1] / 30) * cos(x[2] / 40)
+        old = ((p, ∇p, q, ∇q) -> TA.dpt_dpf(p, ∇p, q, ∇q; control)) ∘ (v, ∇(v), pf_fun, ∇(pf_fun))
+        new = TA.dpt_dpf_field(v, pf_fun, control, sim0.Ω_design)
+        a, b = old(pts), new(pts)
+        @test maximum(maximum(abs, a[i] .- b[i]) for i in 1:length(a)) == 0
+        @test maximum(maximum(abs, a[i]) for i in 1:length(a)) > 0
     end
 
     @testset "switches off give Gridap's own path" begin

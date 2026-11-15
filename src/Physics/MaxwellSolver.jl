@@ -301,7 +301,8 @@ end
 # Cache invalidation
 # ---------------------------------------------------------------------------
 
-"""Clear all cached Maxwell factorizations."""
+"""Clear all cached Maxwell factorizations and the split-assembly plans (Utils/ThreadedAssembly.jl)."""
 function invalidate_maxwell_cache!(pool::SolverCachePool)
     clear_maxwell_factors!(pool)
+    clear_assembly_caches!()
 end

@@ -45,6 +45,8 @@ const THREAD_MIN_CELLS = Ref(2000)
 const THREAD_CHUNKS = Ref(0)
 "Assemble only the design-dependent part of the Maxwell matrix on each evaluation."
 const SPLIT_ASSEMBLY = Ref(true)
+"Compare the split matrix with the ordinary assembly on every n-th use of a plan as well as the first; 0: first use only."
+const SPLIT_VERIFY_EVERY = Ref(0)
 
 thread_chunks() = THREAD_CHUNKS[] > 0 ? THREAD_CHUNKS[] : Threads.nthreads()
 use_threads(n::Integer) = THREADED[] && thread_chunks() > 1 && n >= THREAD_MIN_CELLS[]
@@ -55,11 +57,22 @@ function chunk_ranges(n::Integer, k::Integer=thread_chunks())
     return [(1+div((i - 1) * n, k)):div(i * n, k) for i in 1:k]
 end
 
-"Run `f(i, range)` for every chunk, each on its own task. Safe to call from inside another task."
+"""
+Run `f(i, range)` for every chunk, each on its own task. Safe to call from inside another task.
+An exception raised in a chunk is rethrown as itself (the first one, by chunk), not wrapped.
+"""
 function foreach_chunk(f::F, ranges) where {F}
     length(ranges) == 1 && return f(1, ranges[1])
+    failures = Vector{Any}(nothing, length(ranges))
     @sync for i in eachindex(ranges)
-        Threads.@spawn f(i, ranges[i])
+        Threads.@spawn try
+            f(i, ranges[i])
+        catch err
+            failures[i] = err
+        end
+    end
+    for err in failures
+        err === nothing || throw(err)
     end
     return nothing
 end
@@ -207,13 +220,14 @@ mutable struct SplitMaxwellPlan
     key::Tuple
     inputs::Tuple                            # the simulation's spaces and measures when the plan was built
     usable::Bool                             # false: this pair is assembled directly
+    verified::Bool                           # the split result has been compared with the ordinary assembly
     A_bg::SparseMatrixCSC{ComplexF64,Int}    # design-independent part
     nloc::Int                                # entries of one element matrix
     ptr::Vector{Int}                         # contributions to nzval[p] are E[src[ptr[p]:ptr[p+1]-1]]
     src::Union{Vector{Int32},Vector{Int}}    # linear indices into E (32-bit whenever they fit)
     E::Matrix{ComplexF64}                    # nloc × (design cells): element matrices of the design term
     ncalls::Int
-    lock::ReentrantLock                      # one task at a time fills E and gathers from it
+    lock::ReentrantLock                      # guards E, usable, verified and ncalls: one task at a time uses a plan
 end
 
 const _PLAN_LOCK = ReentrantLock()
@@ -236,6 +250,8 @@ _phys_key(phys) = Tuple(getfield(phys, f) for f in fieldnames(typeof(phys)) if f
 
 # The objects of a simulation the matrix is assembled from. A plan built from one set is not used
 # for another: a simulation is mutable, and replacing a space or a measure changes the matrix.
+# Identity is all that is compared: an object mutated IN PLACE (quadrature weights overwritten, say)
+# keeps its plan, so such a change must be followed by `clear_assembly_caches!()`.
 const _SIM_INPUTS = (:U, :V, :Ω, :dΩ, :Ω_design, :dΩ_design, :dS_top, :dS_bottom, :dΩ_substrate, :dΩ_raman)
 _sim_inputs(sim) = Tuple(hasproperty(sim, f) ? getproperty(sim, f) : nothing for f in _SIM_INPUTS)
 _same_inputs(a::Tuple, b::Tuple) = length(a) == length(b) && all(x === y for (x, y) in zip(a, b))
@@ -341,17 +357,8 @@ function _gather_map(A::SparseMatrixCSC, rows, cols, nloc::Int)
     ncell = length(rows)
     where_ = Matrix{Int}(undef, nloc, ncell)
     ranges = use_threads(ncell) ? chunk_ranges(ncell) : [1:ncell]
-    failures = Vector{Any}(nothing, length(ranges))
-    foreach_chunk(ranges) do i, r
-        try
-            _positions_chunk!(where_, A, rows, cols, r)
-        catch err
-            err isa SplitUnsupported || rethrow()
-            failures[i] = err
-        end
-    end
-    for f in failures
-        f === nothing || throw(f)
+    foreach_chunk(ranges) do _, r
+        _positions_chunk!(where_, A, rows, cols, r)
     end
     ptr = zeros(Int, nnz(A) + 1)
     @inbounds for p in where_
@@ -408,7 +415,7 @@ end
 split_assembly_applies(sim, phys) =
     SPLIT_ASSEMBLY[] && hasproperty(sim, :dΩ_design) && hasproperty(sim, :Ω) && hasproperty(sim, :U) && hasproperty(sim, :V)
 
-_unusable_plan(sim, key, inputs) = SplitMaxwellPlan(sim, key, inputs, false, spzeros(ComplexF64, 0, 0), 0, Int[], Int32[],
+_unusable_plan(sim, key, inputs) = SplitMaxwellPlan(sim, key, inputs, false, false, spzeros(ComplexF64, 0, 0), 0, Int[], Int32[],
     Matrix{ComplexF64}(undef, 0, 0), 0, ReentrantLock())
 
 # A_bg from the ordinary assembly at the zero design, minus the design term there (zero itself whenever
@@ -428,7 +435,7 @@ function _build_plan(sim, key, inputs, phys, direct::F) where {F}
         bg = similar(A0.nzval)
         _gather!(bg, A0.nzval, ptr, src, E, -1.0)
         A_bg = SparseMatrixCSC(size(A0, 1), size(A0, 2), A0.colptr, A0.rowval, bg)
-        return SplitMaxwellPlan(sim, key, inputs, true, A_bg, nloc, ptr, src, E, 0, ReentrantLock())
+        return SplitMaxwellPlan(sim, key, inputs, true, false, A_bg, nloc, ptr, src, E, 0, ReentrantLock())
     catch err
         err isa SplitUnsupported || rethrow()
         log_warn(:assembly, "split Maxwell assembly does not apply to this problem; assembling directly", reason=err.why)
@@ -442,36 +449,46 @@ end
 Maxwell matrix from the cached design-independent part plus the design term.
 `direct(pt, sim, phys)` is the ordinary assembly. It is called at the zero design when
 the plan of a (simulation, parameters) pair is built, and once more on that pair's
-first evaluation, to check the split result. Returns `nothing` when the design term
-has a shape this path does not handle; the caller then assembles directly.
+first evaluation, to check the split result; no split result is returned before that
+check has passed. Returns `nothing` when this path does not handle the problem (or
+failed its check); the caller then assembles directly.
 """
 function assemble_maxwell_split(pt, sim, phys, direct::F) where {F}
     key = _phys_key(phys)
     plan = _plan_for!(inputs -> _build_plan(sim, key, inputs, phys, direct), sim, key)
-    plan.usable || return nothing
     data = _design_term_data(pt, sim, phys)
     data === nothing && return nothing
     cellmat, _, _ = data
-    size(plan.E, 2) == length(cellmat) || return nothing
-    bg = plan.A_bg
-    nz = Vector{ComplexF64}(undef, nnz(bg))
-    first_use = lock(plan.lock) do
-        _element_matrices!(plan.E, cellmat)
-        _gather!(nz, bg.nzval, plan.ptr, plan.src, plan.E, 1.0)
-        plan.ncalls += 1
-        plan.ncalls == 1
-    end
-    A = SparseMatrixCSC(size(bg, 1), size(bg, 2), _parallel_copy(bg.colptr), _parallel_copy(bg.rowval), nz)
-    if first_use
-        ref = direct(pt, sim, phys)
-        same = ref.colptr == A.colptr && ref.rowval == A.rowval
-        err = same ? norm(ref.nzval - A.nzval) / norm(ref.nzval) : Inf
-        if !(err <= 1e-12)
+    # The plan's lock is held from filling E to the end of the first-use check, so a second task can
+    # neither overwrite E nor see a result that the check then rejects.
+    return lock(plan.lock) do
+        (plan.usable && size(plan.E, 2) == length(cellmat)) || return nothing
+        bg = plan.A_bg
+        nz = Vector{ComplexF64}(undef, nnz(bg))
+        try
+            _element_matrices!(plan.E, cellmat)
+        catch err
+            err isa SplitUnsupported || rethrow()
             plan.usable = false
-            log_warn(:assembly, "split Maxwell assembly disagrees with the ordinary assembly; this problem is assembled directly from now on",
-                rel_error=err, same_pattern=same)
-            return ref
+            log_warn(:assembly, "split Maxwell assembly does not apply to this problem; assembling directly", reason=err.why)
+            return nothing
         end
+        _gather!(nz, bg.nzval, plan.ptr, plan.src, plan.E, 1.0)
+        A = SparseMatrixCSC(size(bg, 1), size(bg, 2), _parallel_copy(bg.colptr), _parallel_copy(bg.rowval), nz)
+        plan.ncalls += 1
+        every = SPLIT_VERIFY_EVERY[]
+        if !plan.verified || (every > 0 && plan.ncalls % every == 0)
+            ref = direct(pt, sim, phys)
+            same = ref isa SparseMatrixCSC && ref.colptr == A.colptr && ref.rowval == A.rowval
+            err = same ? norm(ref.nzval - A.nzval) / norm(ref.nzval) : Inf
+            if !(err <= 1e-12)
+                plan.usable = false
+                log_warn(:assembly, "split Maxwell assembly disagrees with the ordinary assembly; this problem is assembled directly from now on",
+                    rel_error=err, same_pattern=same)
+                return ref
+            end
+            plan.verified = true
+        end
+        return A
     end
-    return A
 end
