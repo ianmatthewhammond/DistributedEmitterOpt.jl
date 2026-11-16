@@ -196,7 +196,8 @@ Call sites pass their own triangulation; it is only read when sidewalls are on.
 """
 function dpt_dpf_field(v, pf, control, trian=nothing)
     ∇pf = ∇(pf)
-    if getfield_default(control, :use_sidewall, false)
+    # A vertical wall (slope 0) takes the same path as no sidewall, so the two stay bit-identical.
+    if getfield_default(control, :use_sidewall, false) && control.sidewall_slope != 0.0
         trian === nothing && error("dpt_dpf_field: use_sidewall=true needs a triangulation")
         x = Gridap.CellData.get_physical_coordinate(trian)
         return ((p, ∇p, q, ∇q, xx) ->

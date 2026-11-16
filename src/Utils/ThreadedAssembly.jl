@@ -48,6 +48,11 @@ const SPLIT_ASSEMBLY = Ref(true)
 "Compare the split matrix with the ordinary assembly on every n-th use of a plan as well as the first; 0: first use only."
 const SPLIT_VERIFY_EVERY = Ref(0)
 
+"Raised while building a plan for a design term this path does not handle; the caller assembles directly."
+struct SplitUnsupported <: Exception
+    why::String
+end
+
 thread_chunks() = THREAD_CHUNKS[] > 0 ? THREAD_CHUNKS[] : Threads.nthreads()
 use_threads(n::Integer) = THREADED[] && thread_chunks() > 1 && n >= THREAD_MIN_CELLS[]
 
@@ -59,7 +64,9 @@ end
 
 """
 Run `f(i, range)` for every chunk, each on its own task. Safe to call from inside another task.
-An exception raised in a chunk is rethrown as itself (the first one, by chunk), not wrapped.
+A failure is rethrown unwrapped when it is the only one or when every failing chunk raised a
+`SplitUnsupported`; an `InterruptException` in any chunk wins over everything else; several
+different failures are rethrown together as a `CompositeException`, so none is lost.
 """
 function foreach_chunk(f::F, ranges) where {F}
     length(ranges) == 1 && return f(1, ranges[1])
@@ -71,10 +78,13 @@ function foreach_chunk(f::F, ranges) where {F}
             failures[i] = err
         end
     end
-    for err in failures
-        err === nothing || throw(err)
+    errs = Any[e for e in failures if e !== nothing]
+    isempty(errs) && return nothing
+    for e in errs
+        e isa InterruptException && throw(e)
     end
-    return nothing
+    (length(errs) == 1 || all(e -> e isa SplitUnsupported, errs)) && throw(errs[1])
+    throw(CompositeException(errs))
 end
 
 # ── Reused buffers ───────────────────────────────────────────────────────────
@@ -205,11 +215,6 @@ function Gridap.FESpaces.numeric_loop_vector!(b::Vector{T}, a::GenericSparseMatr
 end
 
 # ── Split Maxwell assembly ───────────────────────────────────────────────────
-
-"Raised while building a plan for a design term this path does not handle; the caller assembles directly."
-struct SplitUnsupported <: Exception
-    why::String
-end
 
 """
 Everything needed to assemble the Maxwell matrix of one (simulation, physical

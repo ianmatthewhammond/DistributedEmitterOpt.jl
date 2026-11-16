@@ -190,6 +190,22 @@ end
         @test_throws TA.SplitUnsupported TA.foreach_chunk(TA.chunk_ranges(8, 4)) do i, _
             i == 3 && throw(TA.SplitUnsupported("probe"))
         end
+        # Several failures: an interrupt wins; a real error is never hidden behind an unsupported one.
+        mixed(errs...) = TA.foreach_chunk(TA.chunk_ranges(8, 4)) do i, _
+            i <= length(errs) && errs[i] !== nothing && throw(errs[i])
+        end
+        @test_throws InterruptException mixed(TA.SplitUnsupported("a"), InterruptException())
+        @test_throws InterruptException mixed(ErrorException("b"), nothing, InterruptException())
+        @test_throws TA.SplitUnsupported mixed(TA.SplitUnsupported("a"), TA.SplitUnsupported("b"))
+        @test_throws ErrorException mixed(nothing, ErrorException("only"))
+        err = try
+            mixed(TA.SplitUnsupported("a"), ErrorException("real"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa CompositeException && length(err.exceptions) == 2
+        @test any(e -> e isa ErrorException, err.exceptions)
         E = Matrix{ComplexF64}(undef, 4, 6)
         ragged = Gridap.Arrays.lazy_map(i -> ones(ComplexF64, isodd(i) ? 2 : 3, 2), collect(1:6))
         with_assembly(threaded=true, split=true, chunks=3, min_cells=1) do
