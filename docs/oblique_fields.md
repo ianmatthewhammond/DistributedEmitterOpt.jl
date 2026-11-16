@@ -145,7 +145,8 @@ unconjugated adjoint and must fail the gradient criterion.
 that assumes a complex symmetric operator. `test/oblique_solver_guard_tests.jl`
 checks matrix symmetry and refusal of incompatible Pardiso storage modes.
 `test/pardiso_refinement_tests.jl` checks `refinement_steps` on both Maxwell types and the
-filter (iparm(8) in force, steps taken, residuals, reuse of a factor by a second solver), and
+filter (iparm(8) in force, steps taken per solve, residuals, reuse and replacement of a factor,
+a second solver taking a factor over or only solving on it), and
 `test/pardiso_refinement_gradient_tests.jl` (slow) that objectives and gradients move by less than 10⁻¹⁰.
 `test/oblique_symmetry_tests.jl` checks transpose, signed angles, and half/full
 cells. `test/backend_adjoint_tests.jl` checks forward and Aᴴ residuals of every
@@ -211,9 +212,19 @@ and iparm(12) is set by the backend for each solve.
 factorization the solver makes: Maxwell of either type and the filter. Its default
 `nothing` changes nothing, and that default differs between the two Maxwell types. The
 legacy profile gives full-storage factorizations iparm(8) = 0; mtype 6 and the filter keep
-MKL's own iparm(8) = 2. With 0, MKL refines only after a factorization that perturbed a
-pivot. With n > 0 it allows n steps on every solve, and with n < 0 it allows |n| steps
-with the residual accumulated in extended precision. The value belongs to the
+the value MKL's `pardisoinit` leaves in the handle, which was 2 on the MKL measured below
+(oneMKL 2025.0). What 0 means depends on the MKL release. From oneMKL 2025.0 it turns
+refinement off, also after a factorization that perturbed a pivot; before 2025.0 it ran
+two steps when pivots were perturbed
+([Intel's note](https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Change-in-behavior-of-Pardiso-and-Sparse-Cluster-Solver-for/m-p/1645928)).
+So on oneMKL 2025.0 and later the full-storage default has no refinement at all. Intel also
+acknowledged all-zero solutions for some matrices with iparm(8) = 0 on oneMKL 2025.0, with
+a fix announced for 2025.1
+([thread](https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Odd-behavior-in-Pardiso-Back-Substitution-with-MKL-2025/m-p/1672201));
+the backend does not check residuals, and the ones measured below are at 10⁻¹².
+With n > 0 MKL allows n steps on every solve, and with n < 0 it allows |n| steps
+with the residual accumulated in extended precision, which Intel documents for sequential
+and OpenMP threading only. The value belongs to the
 factorization: the `refinement_steps` of the solver that factorized last holds for all
 solves on that factor, forward and adjoint. Pardiso reports the steps a solve took in
 iparm(7) and the perturbed pivots of a factorization in iparm(14);
@@ -221,7 +232,8 @@ iparm(7) and the perturbed pivots of a factorization in iparm(14);
 
 Measured on one matrix pair: an 887,079-unknown lowest-order Nédélec half cell
 (14.4 M nonzeros, 290 nm × 186 nm period, 3 nm elements in the patterned layer), with
-40 MKL threads on one 48-core node (two Xeon Platinum 8260, 192 GB). The normal-emission
+40 MKL threads on one 48-core node (two Xeon Platinum 8260, 192 GB), and oneMKL 2025.0
+(a local MKL, `INTEL_MKL_VERSION` 20250001, through Pardiso.jl 1.1.2). The normal-emission
 operator is complex symmetric (defect 2 × 10⁻¹⁸) and the 45° pump operator is not
 (defect 1.6 × 10⁻²).
 
@@ -230,7 +242,7 @@ operator is complex symmetric (defect 2 × 10⁻¹⁸) and the 45° pump operato
 | iparm(8), and steps taken per solve | 0, 0 | 2, 2 | 0, 0 |
 | numerical factorization | 69.5 s | 36.1 s | 35.0 s |
 | nonzeros in the factors | 1.73 × 10⁹ | 0.88 × 10⁹ | 0.88 × 10⁹ |
-| factorization and solve memory, iparm(17) | 27.2 GiB | 16.4 GiB | 16.4 GiB |
+| Pardiso's peak memory, max(iparm(15), iparm(16) + iparm(17)) | 28.9 GiB | 17.6 GiB | 17.6 GiB |
 | one solve, forward / adjoint (best of 3) | 0.71 / 0.72 s | 2.06 / 2.05 s | 0.80 / 0.81 s |
 | relative residual, forward | 1.4 × 10⁻¹² | 2.5 × 10⁻¹³ | 1.8 × 10⁻¹² |
 
@@ -241,10 +253,11 @@ The three solutions agree to 5.1 × 10⁻¹³. No factorization perturbed a pivo
 The pump operator takes mtype 13 by the automatic choice (68 to 79 s over three
 factorizations, 0.76 to 0.83 s per solve without refinement, 1.7 to 2.2 s with
 `refinement_steps = 2`). So on this matrix the symmetric type halves the factorization
-time and takes 40% less memory, and its default spends 2.5 s of 40 s (one factorization,
-one forward and one adjoint solve) on two refinement steps that the full-storage default
-does not take. These are single runs of one design on one mesh and one machine; a matrix
-whose factorization perturbs pivots was not seen, and there refinement may be needed.
+time and takes 39% less memory by Pardiso's own count, and its default spends 2.5 s of
+40 s (one factorization, one forward and one adjoint solve) on two refinement steps that
+the full-storage default does not take. These are single runs of one design on one mesh and
+one machine. A matrix whose factorization perturbs pivots was not seen; there refinement
+may be needed, and on oneMKL 2025.0 and later it runs only if iparm(8) is not 0.
 
 `CUDSSSolver` factors on an NVIDIA GPU with cuDSS through CUDSS.jl 1.0 or later;
 `using CUDSS` loads the extension. Matrices are built on the host as before and copied

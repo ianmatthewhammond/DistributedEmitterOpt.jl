@@ -5,17 +5,37 @@
 # profile does not reach. A given value must arrive in the handle for each type, stay in
 # force when the analysis is reused, give way to the next solver's setting on a reused
 # handle, and leave forward and adjoint solutions equal to the default's within 1e-10.
+# A solve through a solver with another setting must not change it, and a handle that
+# replaces one (changed pattern, `reuse_symbolic = false`) must hold the value asked for.
+# What iparm(8) = 0 means depends on the MKL release: from oneMKL 2025.0 it turns refinement
+# off; before 2025.0 it ran two steps after perturbed pivots. The assertions hold for both,
+# and the MKL release is printed.
 # The keyword and the defaults are checked whether or not Pardiso.jl is installed; the rest
 # is skipped where Pardiso.jl or MKL is not available.
 using DistributedEmitterOpt, LinearAlgebra, SparseArrays, Random, Test
 const DEO = DistributedEmitterOpt
 Base.find_package("Pardiso") !== nothing && @eval import Pardiso
 
-# Worst relative residual of a forward and an adjoint solve, and the two solutions.
+# Worst relative residual of a forward and an adjoint solve, the two solutions, and the
+# refinement steps each solve reports (iparm(7), read right after it).
 function refinement_solves(s, f, M, b)
     x = DEO.solve!(s, f, b)
+    forward_steps = Int(Pardiso.get_iparm(f.ps, 7))
     y = DEO.solve_adjoint!(s, f, b)
-    return max(norm(M * x - b), norm(M' * y - b)) / norm(b), x, y
+    adjoint_steps = Int(Pardiso.get_iparm(f.ps, 7))
+    return max(norm(M * x - b), norm(M' * y - b)) / norm(b), x, y, (forward_steps, adjoint_steps)
+end
+
+# The MKL release in use, for the log only.
+function mkl_version_string()
+    try
+        buf = zeros(UInt8, 200)
+        lib = Base.Libc.Libdl.dlopen(Pardiso.libmkl_rt)
+        ccall(Base.Libc.Libdl.dlsym(lib, :MKL_Get_Version_String), Cvoid, (Ptr{UInt8}, Cint), buf, length(buf))
+        return String(rstrip(String(buf), ['\0', ' ']))
+    catch err
+        return "not read ($(typeof(err)))"
+    end
 end
 
 # iparm(8) of a handle that has seen `pardisoinit` only: MKL's default for that matrix type.
@@ -37,6 +57,7 @@ end
     if !(Base.get_extension(DEO, :PardisoExt) !== nothing && Pardiso.mkl_is_available())
         @info "Pardiso.jl with MKL is not available; skipping the PardisoSolver refinement tests"
     else
+        println("PARDISO refinement: MKL = ", mkl_version_string())
         rng = MersenneTwister(1116)
         n = 400
         B = sprandn(rng, ComplexF64, n, n, 0.02) + 6I          # not symmetric: mtype 13
@@ -57,10 +78,10 @@ end
             @test f0.refinement_default == default
             @test default == (mtype == 13 ? DEO.legacy_pardiso_iparm()[8] : mkl_default_refinement(mtype))
             @test Pardiso.get_iparm(f0.ps, 1) == 1             # MKL reads the array it is given
-            res0, x0, y0 = refinement_solves(d, f0, M, b)
-            done0 = Int(Pardiso.get_iparm(f0.ps, 7))
+            res0, x0, y0, done0 = refinement_solves(d, f0, M, b)
             println("PARDISO refinement $name: default iparm(8)=$default residual=$res0 steps done=$done0 perturbed pivots=$(Pardiso.get_iparm(f0.ps, 14))")
             @test res0 < 1e-11
+            default == 0 || @test all(k -> abs(k) <= abs(default), done0)
 
             for steps in (0, 2, -2)
                 s = PardisoSolver(refinement_steps=steps)
@@ -69,17 +90,19 @@ end
                 @test Pardiso.get_iparm(f.ps, 8) == steps
                 @test Pardiso.get_iparm(f.ps, 1) == 1
                 @test f.refinement_default == default
-                res, x, y = refinement_solves(s, f, M, b)
-                done = Int(Pardiso.get_iparm(f.ps, 7))
+                res, x, y, done = refinement_solves(s, f, M, b)
                 dx = norm(x - x0) / norm(x0)
                 dy = norm(y - y0) / norm(y0)
                 println("PARDISO refinement $name: refinement_steps=$steps residual=$res steps done=$done solution vs default: forward=$dx adjoint=$dy")
                 @test res < 1e-11
                 @test max(dx, dy) < 1e-10
                 @test Pardiso.get_iparm(f.ps, 8) == steps      # the solves leave it in place
-                # MKL's automatic rule refines only after a perturbed pivot.
+                # Never more steps than allowed, on either solve. With 0 no step is taken,
+                # except by an MKL before 2025.0 after a factorization that perturbed a pivot.
                 if steps == 0
-                    @test done == 0 || Pardiso.get_iparm(f.ps, 14) > 0
+                    @test done == (0, 0) || Pardiso.get_iparm(f.ps, 14) > 0
+                else
+                    @test all(k -> abs(k) <= abs(steps), done)
                 end
                 # Same pattern, new values: the analysis is reused and the setting stays.
                 M2 = 2M
@@ -106,6 +129,29 @@ end
             @test factorize(PardisoSolver(refinement_steps=-2), f, M) === f
             @test Pardiso.get_iparm(f.ps, 8) == -2
             DEO.release_factor!(d, f)
+
+            # Solving through a solver with another setting leaves the factor's in place.
+            s1 = PardisoSolver(refinement_steps=1)
+            f = factorize(s1, M)
+            res1, _, _, done1 = refinement_solves(PardisoSolver(refinement_steps=(default == 0 ? 2 : 0)), f, M, b)
+            @test res1 < 1e-11
+            @test Pardiso.get_iparm(f.ps, 8) == 1
+            @test all(k -> abs(k) <= 1, done1)
+
+            # A changed pattern, and `reuse_symbolic = false`, replace the handle: the old one
+            # is released, and the new one holds the value asked for and the same default.
+            c = eltype(M)(0.01)
+            Mp = M + spdiagm(1 => fill(c, n - 1), -1 => fill(c, n - 1))
+            g = factorize(s1, f, Mp)
+            @test g !== f && f.released
+            @test g.mtype == mtype
+            @test Pardiso.get_iparm(g.ps, 8) == 1 && g.refinement_default == default
+            @test refinement_solves(s1, g, Mp, b)[1] < 1e-11
+            h = factorize(PardisoSolver(refinement_steps=-1, reuse_symbolic=false), g, Mp)
+            @test h !== g && g.released
+            @test Pardiso.get_iparm(h.ps, 8) == -1 && h.refinement_default == default
+            @test refinement_solves(d, h, Mp, b)[1] < 1e-11
+            DEO.release_factor!(d, h)
             DEO.release_factor!(d, f0)
         end
 

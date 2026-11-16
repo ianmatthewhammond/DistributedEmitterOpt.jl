@@ -1,9 +1,10 @@
 # PardisoSolver's `refinement_steps` on whole problems: objective and adjoint gradient with
-# refinement at MKL's automatic rule (0) and at two steps (2), against the default solver, to
-# 1e-10. One problem has a 45° pump and a normal emission, so it holds full-storage (mtype 13)
-# and complex symmetric (mtype 6) Maxwell factors side by side; the other is at normal
-# incidence, all mtype 6. Every Maxwell factor must carry the value asked for. Skipped where
-# Pardiso.jl or MKL is not available.
+# `refinement_steps` 0 (no refinement from oneMKL 2025.0; before that, two steps after
+# perturbed pivots) and 2 (two steps), against the default solver, to 1e-10. One problem has
+# a 45° pump and a normal emission, so it holds full-storage (mtype 13) and complex symmetric
+# (mtype 6) Maxwell factors side by side; the other is at normal incidence, all mtype 6.
+# Every Maxwell factor must carry the value asked for. Skipped where Pardiso.jl or MKL is
+# not available.
 include("oblique_common.jl")
 Base.find_package("Pardiso") !== nothing && @eval import Pardiso
 

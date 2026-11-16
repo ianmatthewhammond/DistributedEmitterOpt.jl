@@ -53,10 +53,13 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     #                         factorization this solver makes: Maxwell of either type and
     #                         the filter. `nothing` (default) changes nothing: a full-storage
     #                         Maxwell factorization takes iparm(8) from `iparm` and every
-    #                         other one keeps MKL's default. 0 is MKL's automatic rule (two
-    #                         steps, only when the factorization perturbed a pivot); n > 0
-    #                         allows at most n steps; n < 0 allows at most |n| steps with the
-    #                         residual accumulated in extended precision.
+    #                         other one keeps MKL's default. The meaning of 0 depends on
+    #                         the MKL release: from oneMKL 2025.0 it turns refinement off,
+    #                         also after perturbed pivots; before 2025.0 it ran two steps
+    #                         when the factorization perturbed a pivot. n > 0 allows at
+    #                         most n steps; n < 0 allows at most |n| steps with the residual
+    #                         accumulated in extended precision (documented by Intel for
+    #                         sequential and OpenMP threading only).
     mtype::Int = 13
     mtype_symmetric::Int = 6
     filter_mtype::Int = -2
