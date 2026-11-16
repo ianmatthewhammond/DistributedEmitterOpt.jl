@@ -38,6 +38,10 @@ using Test
         include("pml_tests.jl")
     end
 
+    @testset "Threaded Assembly Tests" begin
+        include("threaded_assembly_tests.jl")
+    end
+
     # Separate namespaces: these files define their own fixtures and constants.
     for (name, file) in (("Optimizer Safety Tests", "plain_optimizer_safety_tests.jl"),
                          ("Checkpoint Tolerance Tests", "raw_tolerance_checkpoint_tests.jl"),
