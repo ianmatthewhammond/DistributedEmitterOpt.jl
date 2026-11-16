@@ -62,24 +62,45 @@ function chunk_ranges(n::Integer, k::Integer=thread_chunks())
     return [(1+div((i - 1) * n, k)):div(i * n, k) for i in 1:k]
 end
 
+# Every exception behind `e`: the members of a CompositeException and the exception stack of a failed
+# task, recursively.
+function _flatten_exceptions!(out::Vector{Any}, e)
+    if e isa CompositeException
+        foreach(x -> _flatten_exceptions!(out, x), e.exceptions)
+    elseif e isa TaskFailedException
+        foreach(x -> _flatten_exceptions!(out, x.exception), current_exceptions(e.task))
+    else
+        push!(out, e)
+    end
+    return out
+end
+
 """
 Run `f(i, range)` for every chunk, each on its own task. Safe to call from inside another task.
-A failure is rethrown unwrapped when it is the only one or when every failing chunk raised a
-`SplitUnsupported`; an `InterruptException` in any chunk wins over everything else; several
-different failures are rethrown together as a `CompositeException`, so none is lost.
+
+Failures are classified over everything that was raised in any chunk, including exceptions that
+were being handled when another was thrown and those inside a `CompositeException` or a failed
+task: an `InterruptException` anywhere wins; if every one is a `SplitUnsupported` the first is
+rethrown; a single exception is rethrown as itself; anything else is rethrown together as a
+`CompositeException`, so no failure is lost behind another.
 """
 function foreach_chunk(f::F, ranges) where {F}
     length(ranges) == 1 && return f(1, ranges[1])
-    failures = Vector{Any}(nothing, length(ranges))
+    failed = fill(false, length(ranges))
+    stacks = Vector{Vector{Any}}(undef, length(ranges))
     @sync for i in eachindex(ranges)
         Threads.@spawn try
             f(i, ranges[i])
-        catch err
-            failures[i] = err
+        catch
+            stacks[i] = Any[x.exception for x in current_exceptions()]   # includes what was being handled
+            failed[i] = true
         end
     end
-    errs = Any[e for e in failures if e !== nothing]
-    isempty(errs) && return nothing
+    any(failed) || return nothing
+    errs = Any[]
+    for i in eachindex(ranges)
+        failed[i] && foreach(e -> _flatten_exceptions!(errs, e), stacks[i])
+    end
     for e in errs
         e isa InterruptException && throw(e)
     end

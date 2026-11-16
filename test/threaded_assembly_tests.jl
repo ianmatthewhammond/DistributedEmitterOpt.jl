@@ -206,6 +206,38 @@ end
         end
         @test err isa CompositeException && length(err.exceptions) == 2
         @test any(e -> e isa ErrorException, err.exceptions)
+        # Exceptions hidden behind another one: raised while handling it, nested in a composite, or
+        # inside a failed task.
+        chained(under) = TA.foreach_chunk(TA.chunk_ranges(8, 4)) do i, _
+            i == 2 || return
+            try
+                throw(under)
+            catch
+                throw(TA.SplitUnsupported("raised while handling"))
+            end
+        end
+        @test_throws InterruptException chained(InterruptException())
+        err = try
+            chained(ErrorException("underneath"))
+            nothing
+        catch e
+            e
+        end
+        @test err isa CompositeException && any(e -> e isa ErrorException, err.exceptions)
+        @test_throws InterruptException mixed(CompositeException(Any[ErrorException("x"), InterruptException()]))
+        @test_throws InterruptException TA.foreach_chunk(TA.chunk_ranges(8, 4)) do i, _
+            i == 1 && fetch(Threads.@spawn throw(InterruptException()))
+        end
+        @test_throws TA.SplitUnsupported mixed(CompositeException(Any[TA.SplitUnsupported("a"), TA.SplitUnsupported("b")]))
+        thrown_nothing = try
+            TA.foreach_chunk(TA.chunk_ranges(8, 4)) do i, _
+                i == 4 && throw(nothing)
+            end
+            :returned
+        catch e
+            e
+        end
+        @test thrown_nothing === nothing                # a thrown `nothing` is a failure, not success
         E = Matrix{ComplexF64}(undef, 4, 6)
         ragged = Gridap.Arrays.lazy_map(i -> ones(ComplexF64, isodd(i) ? 2 : 3, 2), collect(1:6))
         with_assembly(threaded=true, split=true, chunks=3, min_cells=1) do
