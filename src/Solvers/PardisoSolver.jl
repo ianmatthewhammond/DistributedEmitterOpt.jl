@@ -59,7 +59,9 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     #                         when the factorization perturbed a pivot. n > 0 allows at
     #                         most n steps; n < 0 allows at most |n| steps with the residual
     #                         accumulated in extended precision (documented by Intel for
-    #                         sequential and OpenMP threading only).
+    #                         sequential and OpenMP threading only). Before oneMKL 2025.0,
+    #                         perturbed pivots lead to refinement independently of this
+    #                         value, so the limits hold there only without them.
     mtype::Int = 13
     mtype_symmetric::Int = 6
     filter_mtype::Int = -2

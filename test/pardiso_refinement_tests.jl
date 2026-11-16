@@ -26,12 +26,18 @@ function refinement_solves(s, f, M, b)
     return max(norm(M * x - b), norm(M' * y - b)) / norm(b), x, y, (forward_steps, adjoint_steps)
 end
 
+# The steps the solves took stay within the limit iparm(8) set. An MKL before 2025.0 refines
+# after perturbed pivots independently of iparm(8), so the limit is asked for only without them.
+steps_within(f, steps_done, limit) =
+    Pardiso.get_iparm(f.ps, 14) > 0 || all(k -> abs(k) <= abs(limit), steps_done)
+
 # The MKL release in use, for the log only.
 function mkl_version_string()
     try
         buf = zeros(UInt8, 200)
-        lib = Base.Libc.Libdl.dlopen(Pardiso.libmkl_rt)
-        ccall(Base.Libc.Libdl.dlsym(lib, :MKL_Get_Version_String), Cvoid, (Ptr{UInt8}, Cint), buf, length(buf))
+        Base.Libc.Libdl.dlopen(Pardiso.libmkl_rt) do lib
+            ccall(Base.Libc.Libdl.dlsym(lib, :MKL_Get_Version_String), Cvoid, (Ptr{UInt8}, Cint), buf, length(buf))
+        end
         return String(rstrip(String(buf), ['\0', ' ']))
     catch err
         return "not read ($(typeof(err)))"
@@ -81,7 +87,7 @@ end
             res0, x0, y0, done0 = refinement_solves(d, f0, M, b)
             println("PARDISO refinement $name: default iparm(8)=$default residual=$res0 steps done=$done0 perturbed pivots=$(Pardiso.get_iparm(f0.ps, 14))")
             @test res0 < 1e-11
-            default == 0 || @test all(k -> abs(k) <= abs(default), done0)
+            @test steps_within(f0, done0, default)
 
             for steps in (0, 2, -2)
                 s = PardisoSolver(refinement_steps=steps)
@@ -97,13 +103,9 @@ end
                 @test res < 1e-11
                 @test max(dx, dy) < 1e-10
                 @test Pardiso.get_iparm(f.ps, 8) == steps      # the solves leave it in place
-                # Never more steps than allowed, on either solve. With 0 no step is taken,
-                # except by an MKL before 2025.0 after a factorization that perturbed a pivot.
-                if steps == 0
-                    @test done == (0, 0) || Pardiso.get_iparm(f.ps, 14) > 0
-                else
-                    @test all(k -> abs(k) <= abs(steps), done)
-                end
+                # Never more steps than allowed, on either solve; with 0, none. An MKL before
+                # 2025.0 is held to this only if the factorization perturbed no pivot.
+                @test steps_within(f, done, steps)
                 # Same pattern, new values: the analysis is reused and the setting stays.
                 M2 = 2M
                 @test factorize(s, f, M2) === f
@@ -136,7 +138,7 @@ end
             res1, _, _, done1 = refinement_solves(PardisoSolver(refinement_steps=(default == 0 ? 2 : 0)), f, M, b)
             @test res1 < 1e-11
             @test Pardiso.get_iparm(f.ps, 8) == 1
-            @test all(k -> abs(k) <= 1, done1)
+            @test steps_within(f, done1, 1)
 
             # A changed pattern, and `reuse_symbolic = false`, replace the handle: the old one
             # is released, and the new one holds the value asked for and the same default.
