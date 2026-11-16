@@ -82,7 +82,8 @@ Failures are classified over everything that was raised in any chunk, including 
 were being handled when another was thrown and those inside a `CompositeException` or a failed
 task: an `InterruptException` anywhere wins; if every one is a `SplitUnsupported` the first is
 rethrown; a single exception is rethrown as itself; anything else is rethrown together as a
-`CompositeException`, so no failure is lost behind another.
+`CompositeException`, so no failure is lost behind another. With a single chunk `f` runs in the
+caller's task and whatever it raises propagates as raised.
 """
 function foreach_chunk(f::F, ranges) where {F}
     length(ranges) == 1 && return f(1, ranges[1])
@@ -101,6 +102,7 @@ function foreach_chunk(f::F, ranges) where {F}
     for i in eachindex(ranges)
         failed[i] && foreach(e -> _flatten_exceptions!(errs, e), stacks[i])
     end
+    isempty(errs) && error("a chunk failed without a recorded exception")   # e.g. an empty CompositeException
     for e in errs
         e isa InterruptException && throw(e)
     end

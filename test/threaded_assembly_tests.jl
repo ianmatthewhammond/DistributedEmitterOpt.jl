@@ -238,6 +238,7 @@ end
             e
         end
         @test thrown_nothing === nothing                # a thrown `nothing` is a failure, not success
+        @test_throws ErrorException mixed(CompositeException())   # an empty composite is still a failure
         E = Matrix{ComplexF64}(undef, 4, 6)
         ragged = Gridap.Arrays.lazy_map(i -> ones(ComplexF64, isodd(i) ? 2 : 3, 2), collect(1:6))
         with_assembly(threaded=true, split=true, chunks=3, min_cells=1) do
