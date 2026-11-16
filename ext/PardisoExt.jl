@@ -24,6 +24,13 @@ released by the finalizer that `Pardiso.pardisoinit` registers (Pardiso.jl 1.1 a
 MKL empties a handle when it releases it, so that finalizer's repeat release of a released
 factor does nothing. A lock per factor guards its handle, whose iparm(12) changes between
 solves.
+
+Iterative refinement (iparm(8)) belongs to the factorization: `refinement_steps` of the
+solver that factorized last is in force for every solve on that factor, and `nothing` puts
+back the value the handle had when it was created (from the iparm profile for a full-storage
+Maxwell factorization, MKL's default otherwise). The handle is not touched when the value is
+already the wanted one, so a solver with `refinement_steps = nothing` sets nothing that was
+not set before the keyword existed.
 """
 module PardisoExt
 
@@ -45,6 +52,7 @@ mutable struct PardisoFactor{T}
     rowval::Vector{Int}
     released::Bool
     lock::ReentrantLock
+    refinement_default::Int     # iparm(8) of the handle as created, before any `refinement_steps`
 end
 
 one_triangle(mtype::Int) = mtype in (2, -2, 6)
@@ -70,6 +78,15 @@ function maxwell_mtype(solver::DistributedEmitterOpt.PardisoSolver, A)
     mtype in (13, 6) ||
         throw(ArgumentError("PardisoSolver: Maxwell mtype=$mtype is not supported; use 13 and 6 (the defaults of mtype and mtype_symmetric)"))
     return mtype
+end
+
+# iparm(8) for the solves on this handle: the solver's `refinement_steps`, or the handle's own
+# value when that is `nothing`. Written only when it differs from what the handle holds.
+function set_refinement!(ps::Pardiso.MKLPardisoSolver, solver::DistributedEmitterOpt.PardisoSolver,
+                         default::Int)
+    want = something(solver.refinement_steps, default)
+    Pardiso.get_iparm(ps, 8) == want || Pardiso.set_iparm!(ps, 8, want)
+    return nothing
 end
 
 function release_pardiso!(f::PardisoFactor)
@@ -110,8 +127,10 @@ function new_factor(solver::DistributedEmitterOpt.PardisoSolver, Awork::SparseMa
     end
     Pardiso.set_iparm!(ps, 12, forward_mode(mtype))
     solver.msglvl > 0 && Pardiso.set_msglvl!(ps, Pardiso.MESSAGE_LEVEL_ON)
+    refinement_default = Int(Pardiso.get_iparm(ps, 8))
+    set_refinement!(ps, solver, refinement_default)
     f = PardisoFactor{T}(ps, Awork, mtype, size(Awork, 1), copy(Awork.colptr), copy(Awork.rowval),
-        false, ReentrantLock())
+        false, ReentrantLock(), refinement_default)
     return factorize!(f, Pardiso.ANALYSIS_NUM_FACT)
 end
 
@@ -123,6 +142,7 @@ function refactor(solver::DistributedEmitterOpt.PardisoSolver, f::PardisoFactor{
     reused = lock(f.lock) do
         if solver.reuse_symbolic && !f.released && f.mtype == mtype && same_pattern(f, Awork)
             f.A = Awork
+            set_refinement!(f.ps, solver, f.refinement_default)   # this solver's, as for a new factor
             factorize!(f, Pardiso.NUM_FACT)
         else
             release_pardiso!(f)
