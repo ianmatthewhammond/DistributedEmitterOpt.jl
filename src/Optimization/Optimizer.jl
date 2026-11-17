@@ -90,11 +90,66 @@ function _same_optional_schedule(a, b)::Bool
     return aa == bb
 end
 
+"""
+Revision of the 2D DCT-I design filter, written to every checkpoint as "dct_filter_revision".
+1 (also: key absent) — a kernel longer than the cell allowed made the filter tile the cell by repetition.
+2 — the kernel is folded onto the cell, so the walls are mirrors for a kernel of any size.
+The two agree whenever the kernel fits the cell (`dcti_fold_changes_filter` is false).
+
+A problem carries the provenance of what it has cached in `prob.filter_revision`. The rule: it is the OLDEST revision
+among everything cached with the problem (the objective `g`, the history, the best-design record, and optimizer state
+loaded into a run of it). It only goes down, on an import (`_inherit_filter_revision!`: `resume_from_checkpoint!`,
+and either standalone state loader), and it returns to the current revision only where every one of those caches is
+discarded: `load_checkpoint_design!`, and `optimize!` when it starts a fresh history. `save_checkpoint` writes this
+value, not the current revision, so inherited values keep their label however often they are saved, and through
+copies of the problem (it is a field). An unlabelled checkpoint, an unrecorded revision and a state file found by its
+legacy name all count as revision 1.
+"""
+function _checkpoint_filter_revision()
+    return 2
+end
+
+"""
+The problem now also holds values or optimizer state written under `revision` (`nothing`: not recorded, counted as
+1). The provenance keeps the oldest revision; an import never raises it.
+"""
+function _inherit_filter_revision!(prob, revision)
+    prob.filter_revision = min(prob.filter_revision, revision === nothing ? 1 : Int(revision))
+    return prob
+end
+
+"""
+Whether filter revisions 1 and 2 can give this problem different objective or constraint values: a foundry problem
+whose DCT-I kernel the old filter tiled (`dcti_fold_changes_filter`, a conservative test), and in which that filter is
+called at all: by the objective (`control.use_filter`) or by the length-scale constraints, which filter even when
+`use_filter` is off. `use_constraints` defaults to true, the cautious answer for a caller that does not know.
+"""
+_filter_revision_matters(prob; use_constraints::Bool=true) =
+    prob.foundry_mode && (prob.control.use_filter || use_constraints) &&
+    dcti_fold_changes_filter(default_sim(prob.sim), prob.control)
+
+"""
+Refuse cached values of another DCT-I filter revision. `what` names the file ("Checkpoint <path>", "Optimizer state
+<path>"); `revision` is what it was written with (`nothing`: not recorded); `matters` is `_filter_revision_matters`.
+"""
+function _require_filter_revision(revision, what::AbstractString, matters::Bool)
+    (!matters || revision == _checkpoint_filter_revision()) && return nothing
+    written = revision === nothing ? "without a recorded revision" : "with revision $revision"
+    throw(ArgumentError("$what was written $written of the DCT-I design filter; " *
+                        "this problem's filter radius exceeds half a design-cell width, where revision $(_checkpoint_filter_revision()) " *
+                        "(mirror walls for a kernel of any size) gives a different filtered design. Its objective values and optimizer " *
+                        "state cannot be continued. Start a fresh optimization (no resume_from, a new backup_path) with the old " *
+                        "design as the initial guess: DistributedEmitterOpt.load_checkpoint_design!(prob, path)."))
+end
+
 function _checkpoint_metadata(data)
     version = haskey(data, "checkpoint_version") ? Int(data["checkpoint_version"]) : 1
+    filter_revision = (haskey(data, "dct_filter_revision") && data["dct_filter_revision"] !== nothing) ?
+                      Int(data["dct_filter_revision"]) : 1
     if version < OPTIMIZER_CHECKPOINT_VERSION
         return (;
             version,
+            filter_revision,
             exact_resume=false,
             current_epoch=nothing,
             epoch_evals=nothing,
@@ -127,6 +182,7 @@ function _checkpoint_metadata(data)
 
     return (;
         version,
+        filter_revision,
         exact_resume=true,
         current_epoch=Int(data["current_epoch"]),
         epoch_evals=Int(data["epoch_evals"]),
@@ -162,7 +218,13 @@ function _validate_checkpoint_metadata!(metadata;
     robust_sharpness=nothing,
     robust_mode::Symbol=:ks,
     epigraph_config=nothing,
-    constraint_scale=nothing)
+    constraint_scale=nothing,
+    filter_revision_matters::Bool=false)
+
+    # Checked before anything else, and for legacy checkpoints too: where the DCT-I design filter changed (a kernel
+    # longer than the cell allows, see `dcti_fold_changes_filter`), a checkpoint written under the old filter holds
+    # objective values, best-design records and optimizer state of a different problem.
+    filter_revision_matters && _require_filter_revision(metadata.filter_revision, "Checkpoint $filepath", true)
 
     metadata.exact_resume || return nothing
 
@@ -301,6 +363,17 @@ Checkpoints store the accepted design's objective, the flat-substrate normalizat
 for standalone runs with constraints, `constraint_scale`. An exact resume reuses the
 stored normalization and refuses a different `constraint_scale`; resuming a checkpoint
 whose epochs are all complete restores the last epoch's β and loss before returning.
+
+Checkpoints also record the revision of the 2D DCT-I design filter. A checkpoint (or an
+optimizer-state file) written before a long kernel was folded onto the cell is refused
+when this problem's filter radius exceeds half a design-cell width and the filter is in
+use (`control.use_filter`, or `use_constraints`: the length-scale constraints always
+filter), because its objective, constraint values and optimizer state were computed with
+a different filter. `resume_from_checkpoint!` refuses it before restoring anything; start
+such a run afresh with `load_checkpoint_design!`, which takes the design alone. Where the
+kernel fits the cell the two revisions agree and old checkpoints resume as before; a run
+resumed from one keeps writing the old revision into its checkpoints, because its history
+and best-design record still come from it.
 """
 function optimize!(prob::OptimizationProblem;
     max_iter::Int=40,
@@ -368,7 +441,7 @@ function optimize!(prob::OptimizationProblem;
         resume_metadata = nothing
 
         if !isnothing(resume_from)
-            resume_metadata = resume_from_checkpoint!(prob, resume_from; return_metadata=true)
+            resume_metadata = resume_from_checkpoint!(prob, resume_from; return_metadata=true, use_constraints)
             p_opt .= prob.p
             g_opt = prob.g
         end
@@ -398,6 +471,11 @@ function optimize!(prob::OptimizationProblem;
             prob.iteration = 0
             prob.g_best = -Inf
             fill!(prob.p_best, 0.0)
+            # The objective left in the problem belongs to whatever ran before; a fresh history starts without it.
+            prob.g = 0.0
+            # Nothing inherited is left: what this run caches is the current filter's. (Optimizer state loaded
+            # later in this run lowers the provenance again, see `_inherit_filter_revision!`.)
+            prob.filter_revision = _checkpoint_filter_revision()
         elseif empty_history && !isnothing(resume_from)
             log_info(:objective, "resume_from provided: preserving loaded g_history")
         end
@@ -418,7 +496,8 @@ function optimize!(prob::OptimizationProblem;
                 robust_sharpness,
                 robust_mode,
                 epigraph_config,
-                constraint_scale=effective_scale)
+                constraint_scale=effective_scale,
+                filter_revision_matters=_filter_revision_matters(prob; use_constraints))
             progress = _checkpoint_resume_progress(resume_metadata, prob.iteration, max_iter, length(β_schedule))
             start_epoch = progress.start_epoch
             resume_epoch_evals = progress.epoch_evals_start
@@ -480,7 +559,10 @@ function optimize!(prob::OptimizationProblem;
                 checkpoint_alpha_schedule=α_schedule,
                 checkpoint_backend=backend,
                 checkpoint_use_constraints=use_constraints,
-                checkpoint_mma_state_path, rho_init, sigma_init, ccsa_verbose, dual_algorithm,
+                checkpoint_mma_state_path,
+                # The state file named by the checkpoint is as old as the checkpoint's filter revision.
+                checkpoint_filter_revision=isnothing(resume_metadata) ? nothing : resume_metadata.filter_revision,
+                rho_init, sigma_init, ccsa_verbose, dual_algorithm,
                 constraint_scale, constraint_tol_raw, robust_samples, robust_sharpness,
                 robust_mode, epigraph_config, epigraph_resume)
 
@@ -648,6 +730,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
     checkpoint_backend::Union{Symbol,Nothing}=nothing,
     checkpoint_use_constraints::Union{Bool,Nothing}=nothing,
     checkpoint_mma_state_path::Union{String,Nothing}=nothing,
+    checkpoint_filter_revision::Union{Int,Nothing}=nothing,
     rho_init::Float64=1.0,
     ccsa_verbose::Integer=0,
     dual_algorithm::Symbol=:mma,
@@ -673,7 +756,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
             g_norm, backup, backup_every, backup_path, algorithm, epoch,
             epoch_evals_start, epoch_max_iter, checkpoint_beta_schedule,
             checkpoint_alpha_schedule, checkpoint_backend,
-            checkpoint_use_constraints, checkpoint_mma_state_path,
+            checkpoint_use_constraints, checkpoint_mma_state_path, checkpoint_filter_revision,
             rho_init, sigma_init, ccsa_verbose, dual_algorithm, constraint_scale,
             robust_samples, epigraph_config, epigraph_resume)
     end
@@ -691,7 +774,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
             g_norm, backup, backup_every, backup_path, algorithm, epoch,
             epoch_evals_start, epoch_max_iter, checkpoint_beta_schedule,
             checkpoint_alpha_schedule, checkpoint_backend,
-            checkpoint_use_constraints, checkpoint_mma_state_path,
+            checkpoint_use_constraints, checkpoint_mma_state_path, checkpoint_filter_revision,
             rho_init, sigma_init, ccsa_verbose, dual_algorithm, constraint_scale,
             constraint_tol_raw, robust_samples, robust_sharpness)
     end
@@ -838,6 +921,7 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
     checkpoint_backend::Union{Symbol,Nothing}=nothing,
     checkpoint_use_constraints::Union{Bool,Nothing}=nothing,
     checkpoint_mma_state_path::Union{String,Nothing}=nothing,
+    checkpoint_filter_revision::Union{Int,Nothing}=nothing,
     rho_init::Float64=1.0,
     ccsa_verbose::Integer=0,
     dual_algorithm::Symbol=:mma,
@@ -853,6 +937,19 @@ function _run_epoch_standalone!(prob::OptimizationProblem, max_iter::Int, use_co
     legacy_state_path = _state_path(backup_path, epoch)
     resume_state_path = checkpoint_mma_state_path === nothing ? legacy_state_path : checkpoint_mma_state_path
     state = if resume_state_path !== nothing && isfile(resume_state_path)
+        # A state file found by its legacy name carries no checkpoint metadata. Only code older than filter
+        # revision 2 wrote that name, so where the revisions differ its values come from the tiled filter.
+        # A state file named explicitly must come with the filter revision of the checkpoint that names it.
+        if _filter_revision_matters(prob; use_constraints)
+            checkpoint_mma_state_path === nothing &&
+                throw(ArgumentError("Optimizer state $resume_state_path was written before the DCT-I design filter folded long kernels " *
+                                    "(filter revision 1), and this problem's filter radius exceeds half a design-cell width. " *
+                                    "Use a new backup_path, or move the file away, to start from a fresh optimizer state."))
+            _require_filter_revision(checkpoint_filter_revision, "Optimizer state $resume_state_path", true)
+        end
+        # The state about to be loaded is inherited: the problem's checkpoints will name it. A file found by its
+        # legacy name was written by revision-1 code; an explicit one has the revision of the checkpoint naming it.
+        _inherit_filter_revision!(prob, checkpoint_mma_state_path === nothing ? 1 : checkpoint_filter_revision)
         log_info(:epoch, "standalone backend: resuming from on-disk state"; state_path=resume_state_path)
         load_state(resume_state_path)
     elseif checkpoint_mma_state_path !== nothing
@@ -1059,6 +1156,7 @@ function _run_epoch_standalone_epigraph!(prob::OptimizationProblem, max_iter::In
     checkpoint_backend::Union{Symbol,Nothing}=nothing,
     checkpoint_use_constraints::Union{Bool,Nothing}=nothing,
     checkpoint_mma_state_path::Union{String,Nothing}=nothing,
+    checkpoint_filter_revision::Union{Int,Nothing}=nothing,
     rho_init::Float64=1.0,
     sigma_init::Union{Nothing,Vector{Float64}}=nothing,
     ccsa_verbose::Integer=0,
@@ -1093,6 +1191,9 @@ function _run_epoch_standalone_epigraph!(prob::OptimizationProblem, max_iter::In
     if checkpoint_mma_state_path !== nothing
         isfile(checkpoint_mma_state_path) ||
             throw(ArgumentError("Checkpoint metadata references missing MMA state file: $checkpoint_mma_state_path"))
+        _require_filter_revision(checkpoint_filter_revision, "Optimizer state $checkpoint_mma_state_path",
+            _filter_revision_matters(prob; use_constraints))
+        _inherit_filter_revision!(prob, checkpoint_filter_revision)
         (epigraph_resume === nothing || epigraph_resume.T === nothing || epigraph_resume.tau === nothing) &&
             throw(ArgumentError("epigraph resume: checkpoint lacks epigraph_T/epigraph_tau; cannot rebuild x = [p; tau] exactly"))
         sn, sm = MmaccsaBackend.state_dims(checkpoint_mma_state_path)
@@ -1425,6 +1526,9 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
         "p_best" => copy(prob.p_best),
         "g_best" => prob.g_best,
         "g_history" => copy(prob.g_history),
+        # Which DCT-I design filter produced these values: the revision the problem's cached values came with,
+        # which is the current one unless they were restored from an older checkpoint.
+        "dct_filter_revision" => prob.filter_revision,
     )
 
     if has_metadata
@@ -1462,8 +1566,40 @@ function save_checkpoint(prob::OptimizationProblem, filepath::String;
     JLD2.save(filepath, data)
 end
 
-"""Resume optimization state from a checkpoint containing `(p, g_history)` and optionally `(p_best, g_best)`."""
-function resume_from_checkpoint!(prob::OptimizationProblem, filepath::String; return_metadata::Bool=false)
+"""
+    load_checkpoint_design!(prob, filepath) -> prob
+
+Take only the design from a checkpoint, as the initial guess of a fresh optimization. Everything cached with it is
+discarded: the objective, the history, the best-design record (reset as `optimize!` resets them) and any optimizer
+state the checkpoint names. This is the way to reuse a design whose checkpoint `resume_from_checkpoint!` refuses
+because it was written under another revision of the DCT-I design filter.
+"""
+function load_checkpoint_design!(prob::OptimizationProblem, filepath::String)
+    isfile(filepath) || throw(ArgumentError("Checkpoint file not found: $filepath"))
+    data = JLD2.load(filepath)
+    haskey(data, "p") || throw(ArgumentError("Checkpoint must contain key 'p': $filepath"))
+    p_loaded = vec(data["p"])
+    length(p_loaded) == length(prob.p) ||
+        throw(ArgumentError("Checkpoint p length $(length(p_loaded)) != problem DOFs $(length(prob.p))"))
+    prob.p .= p_loaded
+    prob.g = 0.0
+    prob.g_history = Float64[]
+    prob.iteration = 0
+    prob.g_best = -Inf
+    fill!(prob.p_best, 0.0)
+    prob.filter_revision = _checkpoint_filter_revision()
+    return prob
+end
+
+"""
+Resume optimization state from a checkpoint containing `(p, g_history)` and optionally `(p_best, g_best)`.
+
+Nothing is restored from a checkpoint written under another revision of the DCT-I design filter when the revisions
+differ for this problem (`_filter_revision_matters`; `use_constraints` says whether the length-scale constraints, which
+always filter, will be on, and defaults to the cautious true). Use `load_checkpoint_design!` to take its design alone.
+"""
+function resume_from_checkpoint!(prob::OptimizationProblem, filepath::String; return_metadata::Bool=false,
+    use_constraints::Bool=true)
     if !isfile(filepath)
         throw(ArgumentError("Checkpoint file not found: $filepath"))
     end
@@ -1478,6 +1614,11 @@ function resume_from_checkpoint!(prob::OptimizationProblem, filepath::String; re
     if length(p_loaded) != length(prob.p)
         throw(ArgumentError("Checkpoint p length $(length(p_loaded)) != problem DOFs $(length(prob.p))"))
     end
+    # Before any field is restored: cached values of another filter revision must not enter the problem, from where
+    # a later save_checkpoint would relabel them as current.
+    _require_filter_revision(metadata.filter_revision, "Checkpoint $filepath", _filter_revision_matters(prob; use_constraints))
+    # The restored values keep the revision they were computed with; save_checkpoint writes it back.
+    _inherit_filter_revision!(prob, metadata.filter_revision)
 
     prob.p .= p_loaded
     prob.g_history = Float64.(vec(data["g_history"]))

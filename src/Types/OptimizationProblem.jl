@@ -32,6 +32,11 @@ mutable struct OptimizationProblem{PDE<:MaxwellProblem,Obj<:ObjectiveFunction}
     # Metadata
     root::String             # output directory
     iteration::Int           # iteration counter
+
+    # Which revision of the 2D DCT-I design filter produced the cached state above (g, g_history, p_best, g_best)
+    # and the optimizer state this problem's checkpoints name: the current one for a new problem, the checkpoint's
+    # after `resume_from_checkpoint!`. `save_checkpoint` writes it. A field, so it travels with copies of the problem.
+    filter_revision::Int
 end
 
 Base.show(io::IO, prob::OptimizationProblem) =
@@ -100,7 +105,8 @@ function OptimizationProblem(
         p_best,
         g_best,
         root,
-        0
+        0,
+        _checkpoint_filter_revision()
     )
 end
 
@@ -138,7 +144,8 @@ function OptimizationProblem(
         p_best,
         g_best,
         root,
-        0
+        0,
+        _checkpoint_filter_revision()
     )
 end
 

@@ -110,7 +110,9 @@ end
 """
     iDCT_I(x) -> Matrix
 
-Inverse Type-I DCT (self-adjoint up to normalization).
+Inverse Type-I DCT: the forward transform divided by N = 2(nx − 1) · 2(ny − 1). DCT-I is its own inverse up to that
+factor. It is not its own transpose: the endpoint weights make its matrix non-symmetric in the Euclidean inner
+product, so adjoints use `DCT_I_adj`, never `DCT_I` or `iDCT_I`.
 """
 function iDCT_I(x)
     N = (2 * (size(x, 1) - 1)) * (2 * (size(x, 2) - 1))
@@ -195,76 +197,143 @@ function edgepaddcti(arr::Matrix{Float64}, pad)
 end
 
 """
+    fold_axis_dcti(h, n, dim) -> Matrix
+
+A one-sided DCT-I kernel (`h` at offsets 0, 1, 2, … along `dim`, the other half implied by symmetry) folded onto a
+cell of `n` nodes along `dim`. A DCT-I of the cell is the cell mirrored for ever, with period N = 2(n − 1), so the
+kernel that acts on the cell is the sum of the kernel's images in all mirrored copies: offset d collects `h` at
+d + kN (k ≥ 0) and at kN − d (k ≥ 1). On a wall node (d = 0 or d = n − 1) both lists name the same samples, so a
+sample that lands there from an offset beyond the cell counts twice. A kernel shorter than the cell is returned as is.
+
+The cell needs at least two nodes along `dim` (a DCT-I of one node is undefined); fewer is an `ArgumentError`.
+"""
+function fold_axis_dcti(h::Matrix{Float64}, n::Int, dim::Int)
+    n >= 2 || throw(ArgumentError("fold_axis_dcti: a DCT-I cell needs at least 2 nodes along every axis, got $n along axis $dim"))
+    k = size(h, dim)
+    k <= n - 1 && return h
+    N = 2 * (n - 1)
+    out = zeros(Float64, dim == 1 ? (n, size(h, 2)) : (size(h, 1), n))
+    for i in 0:k-1
+        r = mod(i, N)
+        j = r <= n - 1 ? r : N - r                       # the image of offset i inside the cell
+        w = (i > 0 && (r == 0 || r == n - 1)) ? 2.0 : 1.0
+        if dim == 1
+            @views out[j+1, :] .+= w .* h[i+1, :]
+        else
+            @views out[:, j+1] .+= w .* h[:, i+1]
+        end
+    end
+    return out
+end
+
+"""
+    dcti_frequency_filter(h, cell) -> Matrix
+
+The DCT-I frequency response of the one-sided kernel `h` on a cell of `cell` nodes, normalized to 1 at its maximum
+(the mean). A kernel longer than the cell along an axis is folded onto it (`fold_axis_dcti`), so the filter always
+sees the cell continued by its mirror images, whatever the kernel's size. For a kernel that fits (2k − 1 ≤ n on both
+axes) the array transformed is the one `properpaddcti` builds, value for value.
+
+The cell needs at least two nodes along each axis. The response is rebuilt on every call, as it was before the
+kernel was folded; it depends only on the kernel and the cell size.
+"""
+function dcti_frequency_filter(h::Matrix{Float64}, cell::Tuple{Int,Int})
+    all(>=(2), cell) || throw(ArgumentError("dcti_frequency_filter: a DCT-I cell needs at least 2 nodes along every axis, got $cell"))
+    hf = fold_axis_dcti(fold_axis_dcti(h, cell[1], 1), cell[2], 2)
+    hp = zeros(Float64, cell)
+    hp[1:size(hf, 1), 1:size(hf, 2)] .= hf
+    freq_filter = DCT_I(hp)
+    return freq_filter ./ maximum(freq_filter)
+end
+
+"""
     dcti_tiles(cell, kernel) -> (npx, npy)
 
-How many copies of a cell of size `cell` `convolvedcti` tiles along each axis so that a kernel of
-size `kernel` fits: the smallest odd count covering `2k - 1` nodes. An axis with one copy is filtered
-on the cell alone, with DCT-I's mirror walls. An axis with three or more is tiled periodically.
+Always (1, 1): `convolvedcti` filters the cell alone, with DCT-I's mirror walls on every axis. A kernel longer
+than the cell is folded onto it (`fold_axis_dcti`) instead of tiling the cell. Before that fix a long kernel made
+`convolvedcti` tile the cell by plain repetition, which put a shifted copy beside the cell where its mirror image
+belongs. Kept so that callers written for the tiled filter keep working.
 """
-function dcti_tiles(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int})
+dcti_tiles(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int}) = (1, 1)
+
+"""
+    dcti_tiled(cell, kernel) -> (Bool, Bool)
+
+Always (false, false): see `dcti_tiles`.
+"""
+dcti_tiled(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int}) = dcti_tiles(cell, kernel) .> 1
+
+"""
+    legacy_dcti_tiles(cell, kernel) -> (npx, npy)
+
+How many copies of the cell `convolvedcti` tiled by repetition along x and y before a long kernel was folded onto
+the cell (filter revision 1). (1, 1) means the kernel fits the cell (2k − 1 ≤ n on both axes) and revisions 1 and 2
+filter identically; anything larger means revision 1 filtered a different, wrongly continued field. Used only to
+recognize optimizer state written under revision 1 (`dcti_fold_changes_filter`).
+"""
+function legacy_dcti_tiles(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int})
     np = Int.(ceil.((2 .* kernel .- 1) ./ cell))
     return map(n -> iseven(n) ? n + 1 : n, np)
 end
 
 """
-    dcti_tiled(cell, kernel) -> (Bool, Bool)
+    dcti_fold_changes_filter(sim, control) -> Bool
 
-Whether `convolvedcti` tiles the cell along x and along y (see `dcti_tiles`).
+Whether this foundry problem's 2D DCT-I filter (the design filter of `filter_grid` and the filter inside the
+length-scale constraints, both built from `control.R_filter[1]` on `sim.grid`) is one that filter revision 1 tiled
+by repetition, i.e. whether objective and constraint values computed before the kernel was folded belong to a
+different problem. False for the FFT filter and for every kernel that fits the cell.
+
+The test is conservative: it reproduces the old allocation rule (tiling whenever 2k − 1 > n along an axis, k counting
+the kernel array's zero padding), not an operator comparison. A kernel array that the old filter tiled although its
+nonzero part acts as the identity (a 2 × 2 cell with a radius below one pitch) is reported as changed. It does not ask
+whether the filter is called either; `_filter_revision_matters` adds that.
 """
-dcti_tiled(cell::Tuple{Int,Int}, kernel::Tuple{Int,Int}) = dcti_tiles(cell, kernel) .> 1
+function dcti_fold_changes_filter(sim, control)
+    control.use_dct || return false
+    nx, ny = length(sim.grid.x), length(sim.grid.y)
+    Lx = sim.grid.x[end] - sim.grid.x[1]
+    Ly = sim.grid.y[end] - sim.grid.y[1]
+    resolution = (nx - 1) / Lx
+    h = conic_filter_dct(control.R_filter[1], Lx, Ly, resolution)
+    return any(legacy_dcti_tiles((nx, ny), size(h)) .> 1)
+end
 
 """
     convolvedcti(x; h, halo=false) -> Matrix
 
-Convolve x with kernel h using DCT-I (efficient for symmetric boundaries).
+Convolve x with kernel h using DCT-I: the cell is continued beyond every wall by its mirror image (the reflected
+inner nodes; the wall node is not repeated), for a kernel of any size. `x` needs at least two nodes along each axis.
 
-With `halo=true`, the result also keeps one node beyond each wall on every axis the cell is tiled
-along (`dcti_tiled`): the filtered field of the neighbouring copy, which mirror reflection does not
-reproduce there. Untiled axes are returned without a halo.
+`halo` is accepted for callers written for the tiled filter. No axis is tiled any more, so the neighbour of a wall
+node is the mirror image of the inner node and no halo is added: the result has the size of `x`.
 """
 function convolvedcti(x::Matrix{Float64}; h::Matrix{Float64}, halo::Bool=false)
-    sx, sy = size(x)
-    npx, npy = dcti_tiles((sx, sy), size(h))
-
-    x = repeat(x, outer=(npx, npy))
-    x = edgepaddcti(x, ((0, 0), (0, 0)))
-    h = properpaddcti(h, (npx * sx, npy * sy))
-
-    freq_filter = DCT_I(h)
-    freq_filter = freq_filter ./ maximum(freq_filter)
-    out = halo ? (sx + 2 * (npx > 1), sy + 2 * (npy > 1)) : (sx, sy)
-    xout = centeredfft(iDCT_I(DCT_I(x) .* freq_filter), out)
-    return xout
+    # The kernel is a constant of the filter; its folding mutates an array, which Zygote must not trace.
+    freq_filter = Zygote.ignore() do
+        dcti_frequency_filter(h, size(x))
+    end
+    return iDCT_I(DCT_I(x) .* freq_filter)
 end
 
 """
     convolvedcti_adjoint(x; h) -> Matrix
 
-Adjoint of DCT-I convolution with kernel h.
+Adjoint (transpose in the Euclidean inner product) of `convolvedcti` with kernel h. It is not the forward map:
+DCT-I's endpoint weights make the filter matrix non-symmetric, so the transpose is built from `DCT_I_adj` with the
+same folded frequency response.
 """
 function convolvedcti_adjoint(x::Matrix{Float64}; h::Matrix{Float64})
     sx, sy = size(x)
-    npx, npy = dcti_tiles((sx, sy), size(h))
+    freq_filter = dcti_frequency_filter(h, (sx, sy))
 
-    fullshape = (npx * sx, npy * sy)
-    h = properpaddcti(h, fullshape)
-    freq_filter = DCT_I(h)
-    freq_filter = freq_filter ./ maximum(freq_filter)
-
-    y = centeredfft_adjoint(x, fullshape)
-    y = DCT_I_adj(y)
+    y = DCT_I_adj(copy(x))
     y .= y .* freq_filter
     y = DCT_I_adj(y)
-    N = (2 * (fullshape[1] - 1)) * (2 * (fullshape[2] - 1))
+    N = (2 * (sx - 1)) * (2 * (sy - 1))
     y ./= N
 
-    # Adjoint of repeat(x, outer=(npx,npy)) is block sum
-    out = zeros(Float64, sx, sy)
-    for i in 0:npx-1, j in 0:npy-1
-        out .+= y[i * sx + 1:(i + 1) * sx, j * sy + 1:(j + 1) * sy]
-    end
-
-    return out
+    return y
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -350,7 +419,8 @@ end
 """
     filter_grid_adjoint(∂g_∂pf, sim, control) -> Vector
 
-Adjoint of filter operation (same as forward for symmetric kernel).
+Adjoint (transpose) of `filter_grid`. For the DCT-I filter this is `convolvedcti_adjoint`, which differs from the
+forward map at the walls (endpoint weights); only the periodic FFT filter with a symmetric kernel is its own transpose.
 """
 function filter_grid_adjoint(∂g_∂pf::Vector{Float64}, sim, control)
     if !control.use_filter
