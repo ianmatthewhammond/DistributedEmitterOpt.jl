@@ -148,6 +148,11 @@ checks matrix symmetry and refusal of incompatible Pardiso storage modes.
 filter (iparm(8) in force, steps taken per solve, residuals, reuse and replacement of a factor,
 a second solver taking a factor over or only solving on it), and
 `test/pardiso_refinement_gradient_tests.jl` (slow) that objectives and gradients move by less than 10⁻¹⁰.
+`test/pardiso_residual_tests.jl` checks `residual_rtol` on both Maxwell types and two filter
+types: the residual the backend computes against an independent product, that an accepted
+answer and the handle are left bit for bit as they were, that an all-zero and a NaN answer
+are solved again with refinement on and come out right, the error for a limit no solve
+meets, a zero right-hand side, and a reused analysis.
 `test/oblique_symmetry_tests.jl` checks transpose, signed angles, and half/full
 cells. `test/backend_adjoint_tests.jl` checks forward and Aᴴ residuals of every
 solver backend that loads on non-symmetric complex matrices, in forward, adjoint,
@@ -221,14 +226,37 @@ So on oneMKL 2025.0 and later the full-storage default has no refinement at all.
 acknowledged all-zero solutions for some matrices with iparm(8) = 0 on oneMKL 2025.0, with
 a fix announced for 2025.1
 ([thread](https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Odd-behavior-in-Pardiso-Back-Substitution-with-MKL-2025/m-p/1672201));
-the backend does not check residuals, and the ones measured below are at 10⁻¹².
-With n > 0 MKL allows n steps on every solve, and with n < 0 it allows |n| steps
+the residuals measured below are at 10⁻¹², and since `residual_rtol` (next paragraph) every
+answer is checked. With n > 0 MKL allows n steps on every solve, and with n < 0 it allows |n| steps
 with the residual accumulated in extended precision, which Intel documents for sequential
-and OpenMP threading only. The value belongs to the
+and OpenMP threading only. Before oneMKL 2025.0 these limits hold only for a factorization
+that perturbed no pivot, because there perturbed pivots lead to refinement whatever the
+value. The value belongs to the
 factorization: the `refinement_steps` of the solver that factorized last holds for all
 solves on that factor, forward and adjoint. Pardiso reports the steps a solve took in
 iparm(7) and the perturbed pivots of a factorization in iparm(14);
 `test/pardiso_refinement_tests.jl` reads both from the handle.
+
+`residual_rtol` (default 10⁻⁹, the value `CUDSSSolver` uses) makes the backend check its
+answer after every solve, forward or adjoint, Maxwell or filter: ‖b − Op x‖ ≤ `residual_rtol` ‖b‖,
+where Op is the operator that solve inverts, built from the matrix the factorization holds
+(A or Aᵀ for a matrix stored in full; for mtype 6 and the symmetric filter types the
+symmetric matrix that the stored triangle stands for, which is the matrix itself to within
+the 10⁻¹² symmetry tolerance). The check only reads. An answer within the limit is returned
+as Pardiso wrote it, and the handle is not written to, so with the check on or off
+(`residual_rtol = 0`) an accepted solve returns the same bytes. An answer above the limit,
+an all-zero or a NaN answer included, is solved once more on the same factorization with
+refinement on (iparm(8) set to twice the steps the handle allows and at least 2, then put
+back); no new factorization is made. If the second answer is above the limit too, the solve
+throws an error that names both residuals. A second solve that succeeds is reported by a
+warning (the first five times), and each factor counts its checked solves and its second
+solves (`residual_checks`, `residual_resolves`, `last_residual`). The tolerance is that of
+the solver that solves, unlike `refinement_steps`, which belongs to the factorization. The
+check costs one sparse product with the stored matrix and two norms per solve, on one
+thread. A zero right-hand side must give a zero residual. One case to know: a shift-invert
+solve whose shift lies very close to an eigenvalue (`solve_eigen!`) can have a relative
+residual above 10⁻⁹ in a correct computation; `residual_rtol = 0` gives the unchecked solve
+back there.
 
 Measured on one matrix pair: an 887,079-unknown lowest-order Nédélec half cell
 (14.4 M nonzeros, 290 nm × 186 nm period, 3 nm elements in the patterned layer), with

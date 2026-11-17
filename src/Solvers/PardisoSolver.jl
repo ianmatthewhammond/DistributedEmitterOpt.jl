@@ -62,6 +62,14 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     #                         sequential and OpenMP threading only). Before oneMKL 2025.0,
     #                         perturbed pivots lead to refinement independently of this
     #                         value, so the limits hold there only without them.
+    # `residual_rtol`       : Largest accepted ‖b − op(A)x‖/‖b‖ after a solve, forward or
+    #                         adjoint, Maxwell or filter; 0 disables the check, and the solve
+    #                         is then what it was before the keyword existed. The check only
+    #                         reads: an accepted answer is returned as Pardiso wrote it. An
+    #                         answer above the limit is solved again on the same factorization
+    #                         with iterative refinement on, and an error is thrown if that
+    #                         answer is above the limit too. The value of the solver that
+    #                         solves is used.
     mtype::Int = 13
     mtype_symmetric::Int = 6
     filter_mtype::Int = -2
@@ -71,6 +79,7 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     nprocs::Int = 0
     iparm::Union{Nothing,Vector{Int}} = legacy_pardiso_iparm()
     refinement_steps::Union{Nothing,Int} = nothing
+    residual_rtol::Float64 = 1e-9
 end
 
 "Relative tolerance on ‖A − Aᵀ‖ under which a matrix counts as symmetric."
@@ -157,6 +166,19 @@ function checked_pardiso_iparm(iparm::AbstractVector{<:Integer})
             throw(ArgumentError("PardisoSolver: iparm($i) must be $want ($why), got $(iparm[i])"))
     end
     return iparm
+end
+
+"""
+    checked_pardiso_residual_rtol(solver) -> residual_rtol
+
+Validate `residual_rtol` (finite and ≥ 0; 0 disables the residual check). Checked when a
+factor is built and at every solve.
+"""
+function checked_pardiso_residual_rtol(solver::PardisoSolver)
+    rtol = solver.residual_rtol
+    (isfinite(rtol) && rtol >= 0) ||
+        throw(ArgumentError("PardisoSolver: residual_rtol must be finite and ≥ 0 (0 disables the check), got $rtol"))
+    return rtol
 end
 
 # Stub implementations that error if extension not loaded

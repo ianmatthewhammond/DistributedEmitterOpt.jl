@@ -63,7 +63,8 @@ using Test
         for file in ("oblique_fresnel_tests.jl", "oblique_film_reference_tests.jl",
                      "oblique_normal_equivalence_tests.jl", "oblique_order_guard_tests.jl", "oblique_api_tests.jl",
                      "oblique_mesh_reuse_tests.jl", "oblique_solver_guard_tests.jl",
-                     "backend_adjoint_tests.jl", "pardiso_refinement_tests.jl", "oblique_negative_control_tests.jl",
+                     "backend_adjoint_tests.jl", "pardiso_refinement_tests.jl", "pardiso_residual_tests.jl",
+                     "oblique_negative_control_tests.jl",
                      "oblique_symmetric_adjoint_control_tests.jl", "oblique_legacy_gradient_tests.jl",
                      "cudss_solver_tests.jl")
             include(file)
