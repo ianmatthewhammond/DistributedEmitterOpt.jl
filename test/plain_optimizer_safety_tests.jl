@@ -22,10 +22,11 @@ mutable struct OptimizationProblem
     root::String
     foundry_mode::Bool
     sim::Nothing
+    filter_revision::Int
 end
 problem() = OptimizationProblem([0.4,0.6], 0.0, zeros(2), 0, Float64[], -Inf,
     zeros(2), FakeControl(8.0,1e-6), (;env=(;logger_cfg=nothing), inputs=nothing, outputs=nothing, α_loss=0.0),
-    "unused", false, nothing)
+    "unused", false, nothing, 2)
 # The loss schedule rebuilds prob.pde; only α_loss matters here.
 MaxwellProblem(; env, inputs, outputs, α_loss) = (; env, inputs, outputs, α_loss)
 const checkpoints = NamedTuple[]
@@ -33,7 +34,10 @@ const freed = Ref(0)
 const return_code = Ref(-1)
 struct MmaState end
 free_state!(::MmaState) = (freed[] += 1; nothing)
-_state_path(args...) = nothing
+# The legacy-named state file of an epoch (two arguments); nothing is written under the per-evaluation name here.
+const legacy_state = Ref{Any}(nothing)
+_state_path(backup_path, epoch) = legacy_state[]
+_state_path(backup_path, epoch, epoch_evals) = nothing
 _iteration_checkpoint_metadata(args...; kwargs...) = nothing
 _epigraph_config(args...) = nothing
 _robust_sharpness_record(args...) = nothing
@@ -45,7 +49,10 @@ log_debug(args...; kwargs...) = nothing
 const warnings = Any[]
 log_warn(args...; kwargs...) = (push!(warnings, (args, (;kwargs...))); nothing)
 next_iteration!(prob) = (prob.iteration += 1)
+# What the problem held as its objective when the run's first evaluation began.
+const g_at_first_eval = Ref{Any}(nothing)
 function objective_and_gradient!(g, p, prob)
+    g_at_first_eval[] === nothing && (g_at_first_eval[] = prob.g)
     g .= 2p
     return sum(abs2,p)
 end
@@ -56,18 +63,30 @@ function log_iteration!(prob, g, p; kwargs...)
         prob.p_best .= p
     end
 end
-save_checkpoint(prob, path; kwargs...) = push!(checkpoints, (;kwargs...))
+save_checkpoint(prob, path; kwargs...) = push!(checkpoints, (;kwargs..., problem_filter_revision=prob.filter_revision))
 # Resume: the loaded design/objective and metadata come from `resume_state`; the
 # production `_checkpoint_resume_progress` turns the metadata into a start epoch.
 const resume_state = Ref{Any}(nothing)
 const validated = Ref{Any}(nothing)
-function resume_from_checkpoint!(prob, path; return_metadata=false)
+const resume_kwargs = Ref{Any}(nothing)
+function resume_from_checkpoint!(prob, path; return_metadata=false, kwargs...)
+    resume_kwargs[] = (; kwargs...)
     st = resume_state[]
     prob.p .= st.p; prob.g = st.g; prob.iteration = st.iteration
     return st.metadata
 end
 _validate_checkpoint_metadata!(md; kwargs...) = (validated[] = (;kwargs...); nothing)
 default_sim(sim) = sim
+# Whether the DCT-I filter revisions differ for the problem: production asks the filter; here a test sets it.
+const filter_matters = Ref(false)
+const matters_kwargs = Ref{Any}(nothing)
+_filter_revision_matters(prob; kwargs...) = (matters_kwargs[] = (; kwargs...); filter_matters[])
+# Reaching the state loader is all a test here needs to see.
+struct StateLoaded <: Exception end
+const state_loads = Ref(:throw)     # :ok lets a run go on with the loaded state
+load_state(path) = state_loads[] === :ok ? MmaState() : throw(StateLoaded())
+# The epigraph epoch builds its cache before it looks at a state file; nothing here reaches further.
+EpigraphCache(np, ns) = nothing
 # Constraint values: fixed by default; `final_values` overrides them for gradient-free
 # calls (the final feasibility check) so a test can set the returned design's values.
 const final_values = Ref{Any}(nothing)
@@ -122,8 +141,10 @@ function load_optimizer(path)
             if sig isa Expr && sig.head == :call
                 name = sig.args[1]
                 if (name in (:optimize!, :run_epoch!, :_run_epoch_standalone!, :linewidth_feasibility,
-                             :_set_epoch_state!) &&
-                    occursin("prob::OptimizationProblem", string(sig))) || name === :_checkpoint_resume_progress
+                             :_set_epoch_state!, :_run_epoch_standalone_epigraph!) &&
+                    occursin("prob::OptimizationProblem", string(sig))) ||
+                   name in (:_checkpoint_resume_progress, :_require_filter_revision, :_checkpoint_filter_revision,
+                            :_inherit_filter_revision!)
                     Core.eval(@__MODULE__, ex)
                     push!(loaded,name)
                 end
@@ -134,7 +155,8 @@ function load_optimizer(path)
     end
     visit(parsed)
     loaded == Set([:optimize!,:run_epoch!,:_run_epoch_standalone!,:linewidth_feasibility,
-                   :_set_epoch_state!,:_checkpoint_resume_progress]) || error("missing production functions: $loaded")
+                   :_set_epoch_state!,:_checkpoint_resume_progress,:_require_filter_revision,
+                   :_checkpoint_filter_revision,:_run_epoch_standalone_epigraph!,:_inherit_filter_revision!]) || error("missing production functions: $loaded")
 end
 end
 
@@ -272,7 +294,7 @@ end
 # Metadata as `_checkpoint_metadata` returns it, for the fields optimize! reads.
 resume_md(; current_epoch, epoch_evals, g_norm=nothing) = (; exact_resume=true, current_epoch,
     epoch_evals, mma_state_path=nothing, epigraph_T=nothing, epigraph_tau=nothing, g_norm,
-    constraint_scale=nothing)
+    constraint_scale=nothing, filter_revision=2)
 
 @testset "a completed resume restores the last epoch's state before returning" begin
     F.return_code[] = 5
@@ -291,7 +313,112 @@ resume_md(; current_epoch, epoch_evals, g_norm=nothing) = (; exact_resume=true, 
     @test design == [0.1, 0.1] && g == 0.01
     @test p.g == 0.01            # not the flat evaluation's 999
     @test p.iteration == 10      # no epoch ran
+    # The resume told the checkpoint validation whether the DCT-I filter revisions differ for this problem.
+    @test F.validated[].filter_revision_matters == false
+    F.filter_matters[] = true
+    p = F.problem(); p.foundry_mode = true
+    F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
+        α_schedule=[0.25, 0.5], use_constraints=true, resume_from="injected", on_infeasible=:error)
+    @test F.validated[].filter_revision_matters == true
+    # optimize! tells both the loader and the test whether the length-scale constraints will be on.
+    @test F.resume_kwargs[].use_constraints == true && F.matters_kwargs[].use_constraints == true
+    p = F.problem(); p.foundry_mode = true
+    F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
+        α_schedule=[0.25, 0.5], use_constraints=false, resume_from="injected")
+    @test F.resume_kwargs[].use_constraints == false && F.matters_kwargs[].use_constraints == false
+    F.filter_matters[] = false
+    # A resume keeps whatever revision the loader recorded for the restored values: optimize! does not promote it ...
+    p = F.problem(); p.foundry_mode = true; p.filter_revision = 1      # as the loader leaves it after an old checkpoint
+    F.optimize!(p; backend=:standalone_ccsaq, max_iter=5, β_schedule=[8.0, Inf],
+        α_schedule=[0.25, 0.5], use_constraints=true, resume_from="injected", on_infeasible=:error)
+    @test p.filter_revision == 1
     F.final_values[] = nothing
+end
+
+@testset "a fresh optimization labels its cached values with the current filter revision" begin
+    F.return_code[] = 5
+    # The problem arrives with an objective, a history and a best record of revision 1. A fresh history discards all
+    # of them BEFORE the first evaluation: the objective too, so nothing inherited can be published as current.
+    old!(p) = (p.filter_revision = 1; p.g = 0.77; push!(p.g_history, 0.77); p.g_best = 0.77; p.p_best .= 0.3; p)
+    p = old!(F.problem()); F.g_at_first_eval[] = nothing
+    F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0])
+    @test F.g_at_first_eval[] == 0.0
+    @test p.filter_revision == 2 && !(0.77 in p.g_history)
+    # ... and not when the caller keeps the problem's history (empty_history=false): inherited values stay, and so
+    # does their label.
+    p = old!(F.problem()); F.g_at_first_eval[] = nothing
+    F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], empty_history=false)
+    @test F.g_at_first_eval[] == 0.77
+    @test p.filter_revision == 1 && 0.77 in p.g_history
+end
+
+@testset "an optimizer-state file is not loaded under another DCT-I filter revision" begin
+    mktemp() do path, io
+        close(io)
+        p = F.problem(); p.foundry_mode = true
+        epoch!(rev; uc=true) = F._run_epoch_standalone!(p, 5, uc, 1e-6; epoch=1,
+            checkpoint_mma_state_path=path, checkpoint_filter_revision=rev)
+        # Where the revisions differ: a state file named explicitly needs the current revision with it.
+        F.filter_matters[] = true
+        @test_throws ArgumentError epoch!(nothing)
+        @test_throws ArgumentError epoch!(1)
+        @test_throws F.StateLoaded epoch!(2)
+        @test F.matters_kwargs[].use_constraints == true
+        @test_throws ArgumentError epoch!(1; uc=false)
+        @test F.matters_kwargs[].use_constraints == false     # the epoch's own answer is passed on
+        # Where they agree (kernel fits, or the filter is not used): loaded whatever the record says.
+        F.filter_matters[] = false
+        @test_throws F.StateLoaded epoch!(nothing)
+        @test_throws F.StateLoaded epoch!(1)
+
+        # The same through the dispatcher: run_epoch! forwards the revision to the standalone epoch ...
+        disp!(rev) = F.run_epoch!(p, 5, true, 1e-6; backend=:standalone_ccsaq, epoch=1,
+            checkpoint_mma_state_path=path, checkpoint_filter_revision=rev)
+        F.filter_matters[] = true
+        @test_throws ArgumentError disp!(nothing)
+        @test_throws ArgumentError disp!(1)
+        @test_throws F.StateLoaded disp!(2)
+        # ... and to the epigraph epoch, whose check sits before anything is read from the state file. Past the
+        # filter check the next check of that loader speaks (this call gives it no epigraph_T), which shows where
+        # the filter check stands.
+        said(f) = try f(); "" catch err; sprint(showerror, err) end
+        epi!(rev) = F.run_epoch!(p, 5, false, 1e-6; backend=:standalone_ccsaq, epoch=1, robust_mode=:epigraph,
+            epigraph_config=(tol=1e-6, sigma=1.0, eps=1e-6, linewidth_tol=0.01), robust_samples=[(0.0, 0.0)],
+            checkpoint_mma_state_path=path, checkpoint_filter_revision=rev)
+        @test occursin("DCT-I design filter", said(() -> epi!(nothing)))
+        @test occursin("DCT-I design filter", said(() -> epi!(1)))
+        @test occursin("epigraph_T", said(() -> epi!(2))) && !occursin("DCT-I design filter", said(() -> epi!(2)))
+        F.filter_matters[] = false
+        @test occursin("epigraph_T", said(() -> epi!(nothing)))
+
+        # Completed restores (the loader hands back a state and the epoch runs on), where the revisions agree for the
+        # problem so that nothing is refused. Loaded optimizer state is inherited, so the provenance follows it and
+        # every checkpoint the run publishes carries it.
+        F.state_loads[] = :ok
+        F.return_code[] = 5
+        # (a) a fresh optimize! finds a state file under the legacy name: written by revision-1 code.
+        F.legacy_state[] = path
+        empty!(F.checkpoints)
+        q = F.problem()
+        F.optimize!(q; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], backup=true, backup_every=0, backup_path="injected")
+        @test q.filter_revision == 1
+        @test !isempty(F.checkpoints) && all(c.problem_filter_revision == 1 for c in F.checkpoints)
+        # Without such a file the same run publishes the current revision.
+        F.legacy_state[] = nothing
+        empty!(F.checkpoints)
+        q = F.problem()
+        F.optimize!(q; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], backup=true, backup_every=0, backup_path="injected")
+        @test q.filter_revision == 2
+        @test !isempty(F.checkpoints) && all(c.problem_filter_revision == 2 for c in F.checkpoints)
+        # (b) a state file named explicitly brings the revision of the checkpoint that names it; unrecorded counts
+        # as 1; an older provenance already in the problem is never raised.
+        for (had, rev, now) in ((2, 1, 1), (2, nothing, 1), (2, 2, 2), (1, 2, 1))
+            q = F.problem(); q.filter_revision = had
+            F._run_epoch_standalone!(q, 5, false, 1e-6; epoch=1, checkpoint_mma_state_path=path, checkpoint_filter_revision=rev)
+            @test q.filter_revision == now
+        end
+        F.state_loads[] = :throw
+    end
 end
 
 @testset "an exact resume reuses the checkpoint's normalization" begin

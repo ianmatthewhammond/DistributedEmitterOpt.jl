@@ -48,10 +48,10 @@ end
 
 |∇f|² at the cell's nodes from central differences, in physical units. Per axis, the neighbour
 across a wall is:
-- with `halo` set for that axis, the extra node `f` carries beyond the wall (the filter's own value
-  there, e.g. `convolvedcti(...; halo=true)` on a tiled axis); the cell is `f` without it;
+- with `halo` set for that axis, the extra node `f` carries beyond the wall (a filter's own value
+  there); the cell is `f` without it. No filter of this package returns a halo any more;
 - otherwise, with `mirror` (a Bool or an (x, y) pair) set, the reflected inner node, so the normal
-  derivative on the wall is zero: DCT-I on an untiled cell, whose walls are mirrors;
+  derivative on the wall is zero: the DCT-I filter, whose walls are mirrors for a kernel of any size;
 - otherwise the node on the opposite edge: a periodic cell of the cell's size, as `convolvefft` tiles it.
 """
 function gradient_sq(f::AbstractMatrix, resolution::Float64; mirror, halo::NTuple{2,Bool}=(false, false))
@@ -153,8 +153,8 @@ function glc_solid(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     # Build filter/threshold functions
     R = control.R_filter[1]
     h = conic_filter(R, Lx, Ly, resolution)
-    # On an axis convolvedcti tiles, the wall neighbour is the next copy's filtered value (the halo);
-    # on an untiled axis DCT-I's walls are mirrors; the FFT filter is periodic.
+    # DCT-I's walls are mirrors on every axis (a kernel longer than the cell is folded onto it, see
+    # `fold_axis_dcti`), so `dcti_tiled` is (false, false) and no halo is used; the FFT filter is periodic.
     halo = control.use_dct ? dcti_tiled((nx, ny), size(h)) : (false, false)
     filter_f = p -> control.use_dct ? convolvedcti(p; h, halo=any(halo)) : convolvefft(p; h)
     threshold_f = p -> smoothed_projection(p, control, sim)
@@ -193,8 +193,8 @@ function glc_void(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     # Build filter/threshold functions
     R = control.R_filter[1]
     h = conic_filter(R, Lx, Ly, resolution)
-    # On an axis convolvedcti tiles, the wall neighbour is the next copy's filtered value (the halo);
-    # on an untiled axis DCT-I's walls are mirrors; the FFT filter is periodic.
+    # DCT-I's walls are mirrors on every axis (a kernel longer than the cell is folded onto it, see
+    # `fold_axis_dcti`), so `dcti_tiled` is (false, false) and no halo is used; the FFT filter is periodic.
     halo = control.use_dct ? dcti_tiled((nx, ny), size(h)) : (false, false)
     filter_f = p -> control.use_dct ? convolvedcti(p; h, halo=any(halo)) : convolvefft(p; h)
     threshold_f = p -> smoothed_projection(p, control, sim)
