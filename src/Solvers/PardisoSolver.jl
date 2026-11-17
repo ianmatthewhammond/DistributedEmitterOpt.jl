@@ -49,6 +49,19 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     # `iparm`               : Profile for full-storage Maxwell factorizations (checked by
     #                         `checked_pardiso_iparm`); `nothing` keeps MKL's defaults.
     #                         iparm(12) is set by the backend for each solve.
+    # `refinement_steps`    : iparm(8), the iterative refinement of every solve, for each
+    #                         factorization this solver makes: Maxwell of either type and
+    #                         the filter. `nothing` (default) changes nothing: a full-storage
+    #                         Maxwell factorization takes iparm(8) from `iparm` and every
+    #                         other one keeps MKL's default. The meaning of 0 depends on
+    #                         the MKL release: from oneMKL 2025.0 it turns refinement off,
+    #                         also after perturbed pivots; before 2025.0 it ran two steps
+    #                         when the factorization perturbed a pivot. n > 0 allows at
+    #                         most n steps; n < 0 allows at most |n| steps with the residual
+    #                         accumulated in extended precision (documented by Intel for
+    #                         sequential and OpenMP threading only). Before oneMKL 2025.0,
+    #                         perturbed pivots lead to refinement independently of this
+    #                         value, so the limits hold there only without them.
     mtype::Int = 13
     mtype_symmetric::Int = 6
     filter_mtype::Int = -2
@@ -57,6 +70,7 @@ Base.@kwdef struct PardisoSolver <: AbstractSolver
     msglvl::Int = 0
     nprocs::Int = 0
     iparm::Union{Nothing,Vector{Int}} = legacy_pardiso_iparm()
+    refinement_steps::Union{Nothing,Int} = nothing
 end
 
 "Relative tolerance on ‖A − Aᵀ‖ under which a matrix counts as symmetric."
