@@ -35,7 +35,9 @@ not set before the keyword existed.
 Every solve is checked unless `residual_rtol = 0`: ‖b − Op x‖ ≤ `residual_rtol` ‖b‖, where Op
 is the operator that solve inverts, built from the matrix the factorization holds (A or Aᵀ for
 a matrix stored in full; for a one-triangle type the symmetric matrix that triangle stands
-for). The check reads x and b and writes neither, nor the handle. An answer above the limit is
+for). A matrix stored in full is the caller's own object, not a copy, so its values must not be
+changed in place between a factorization and the solves on it. The check reads x and b and
+writes neither, nor the handle. An answer above the limit is
 solved once more on the same factorization with refinement on (`resolve_steps`), iparm(8) is
 put back, and an error is thrown if the second answer is above the limit too. The tolerance is
 that of the solver that solves. A factor counts its checked solves and its second solves
@@ -239,13 +241,13 @@ function accept_or_refine!(f::PardisoFactor{T}, x::Vector{T}, b::Vector{T}, mode
     res1 <= rtol && return x
     held = Int(Pardiso.get_iparm(f.ps, 8))
     steps = resolve_steps(held)
+    f.residual_resolves += 1                 # counted when attempted
     Pardiso.set_iparm!(f.ps, 8, steps)
     try
         raw_solve!(x, f, b, mode)
     finally
         Pardiso.set_iparm!(f.ps, 8, held)
     end
-    f.residual_resolves += 1
     res2 = relative_residual!(r, f, x, b, mode)
     f.last_residual = res2
     res2 <= rtol ||

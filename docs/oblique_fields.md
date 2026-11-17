@@ -253,7 +253,10 @@ warning (the first five times), and each factor counts its checked solves and it
 solves (`residual_checks`, `residual_resolves`, `last_residual`). The tolerance is that of
 the solver that solves, unlike `refinement_steps`, which belongs to the factorization. The
 check costs one sparse product with the stored matrix and two norms per solve, on one
-thread. A zero right-hand side must give a zero residual. One case to know: a shift-invert
+thread. A zero right-hand side must give a zero residual. Two cases to know. A matrix stored
+in full (mtype 13, filter mtype 11) is held by reference, not copied: changing its values in
+place and solving before the next factorization now fails the check, where it used to return
+the old matrix's solution silently. And a shift-invert
 solve whose shift lies very close to an eigenvalue (`solve_eigen!`) can have a relative
 residual above 10⁻⁹ in a correct computation; `residual_rtol = 0` gives the unchecked solve
 back there.
