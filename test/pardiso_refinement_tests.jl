@@ -9,7 +9,8 @@
 # replaces one (changed pattern, `reuse_symbolic = false`) must hold the value asked for.
 # What iparm(8) = 0 means depends on the MKL release: from oneMKL 2025.0 it turns refinement
 # off; before 2025.0 it ran two steps after perturbed pivots. The assertions hold for both,
-# and the MKL release is printed.
+# and the MKL release is printed. The residual check of every solve (`residual_rtol`, on by
+# default) has its own file, pardiso_residual_tests.jl; here it runs and accepts every answer.
 # The keyword and the defaults are checked whether or not Pardiso.jl is installed; the rest
 # is skipped where Pardiso.jl or MKL is not available.
 using DistributedEmitterOpt, LinearAlgebra, SparseArrays, Random, Test
@@ -28,8 +29,15 @@ end
 
 # The steps the solves took stay within the limit iparm(8) set. An MKL before 2025.0 refines
 # after perturbed pivots independently of iparm(8), so the limit is asked for only without them.
-steps_within(f, steps_done, limit) =
-    Pardiso.get_iparm(f.ps, 14) > 0 || all(k -> abs(k) <= abs(limit), steps_done)
+# Each limit that was really compared is counted, and the testset ends by asking that every
+# limit was compared at least once: a run in which every factorization perturbed a pivot would
+# otherwise pass without having checked a single bound.
+const STEP_LIMITS_COMPARED = Dict{Int,Int}()
+function steps_within(f, steps_done, limit)
+    Pardiso.get_iparm(f.ps, 14) > 0 && return true
+    STEP_LIMITS_COMPARED[limit] = get(STEP_LIMITS_COMPARED, limit, 0) + 1
+    return all(k -> abs(k) <= abs(limit), steps_done)
+end
 
 # The MKL release in use, for the log only.
 function mkl_version_string()
@@ -174,5 +182,9 @@ end
         f = DEO.lu!(PardisoSolver(iparm=nothing), B)
         @test Pardiso.get_iparm(f.ps, 8) == mkl_default_refinement(13)
         DEO.release_factor!(d, f)
+
+        # Every step limit asked for above was compared on a factorization without perturbed pivots.
+        println("PARDISO refinement: step limits compared without perturbed pivots (limit => times): ", sort(collect(STEP_LIMITS_COMPARED)))
+        @test all(limit -> get(STEP_LIMITS_COMPARED, limit, 0) > 0, (0, 1, 2, -2))
     end
 end
