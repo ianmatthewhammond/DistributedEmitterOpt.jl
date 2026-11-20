@@ -19,6 +19,28 @@ using .MmaccsaBackend: MmaState, save_state, load_state, free_state!
 const OPTIMIZER_CHECKPOINT_VERSION = 2
 
 """
+    require_dct_filter_problem(prob, caller; use_constraints=true)
+
+Refuse, before anything is changed, a problem whose 2D design filter cannot run: a foundry problem with
+`control.use_dct=false` in which that filter is reached, i.e. `control.use_filter` is on or the linewidth constraints
+are used (`use_constraints`; they filter even when `use_filter` is off). Throws the `ArgumentError` of
+`require_dct_filter_2d`. Called before anything is changed by `optimize!` (both problem types), `run_epoch!`,
+`init_random!`, the eigen `objective_and_gradient!`, `robust_sidewall_samples!` (and so `robust_sidewall_objective!`),
+`spectral_sweep`, `fabrication_sweep` and `visualize_results`, so a refusal leaves the problem, its history, the
+best-design record, the control, the solver caches and any checkpoint as they were. The robust sidewall calls apply
+it only to `OptimizationProblem` and `EigenOptimizationProblem`. The eigen `optimize!` and the two sweeps skip it
+when they would evaluate nothing (an empty β schedule, zero sweep points). The `OptimizationProblem` `optimize!`
+does not: it checks before loading `resume_from`, so a resume whose checkpoint has completed every epoch is refused
+even when no evaluation would be needed. 3D problems never read `use_dct`.
+"""
+function require_dct_filter_problem(prob, caller::AbstractString; use_constraints::Bool=true)
+    if prob.foundry_mode && !prob.control.use_dct && (prob.control.use_filter || use_constraints)
+        require_dct_filter_2d(prob.control, caller)
+    end
+    return nothing
+end
+
+"""
     flat_substrate_norm(prob::OptimizationProblem) -> Float64
 
 Compute objective baseline at the flat-substrate design (`p = 0`), matching
@@ -375,6 +397,11 @@ or an infeasible trial). With `use_constraints`, both linewidth constraints are
 re-evaluated at the returned design after the last epoch (`linewidth_feasibility`); a
 CCSA return does not by itself guarantee feasibility, e.g. after `max_iter` runs out.
 
+A foundry problem whose control has `use_dct=false` is refused with an `ArgumentError` at the start, before any
+resume or reset, when the 2D filter is reached (`control.use_filter`, or `use_constraints`); see `Control`. The
+check reads the requested configuration before `resume_from` is loaded, so it also refuses a resume whose
+checkpoint has completed every epoch, even when returning the saved design would require no evaluation.
+
 Checkpoints store the accepted design's objective, the flat-substrate normalization and,
 for standalone runs with constraints, `constraint_scale`. An exact resume reuses the
 stored normalization and refuses a different `constraint_scale`; resuming a checkpoint
@@ -450,6 +477,8 @@ function optimize!(prob::OptimizationProblem;
         throw(ArgumentError("robust_samples need foundry_projection_mode=:current; " *
             ":legacy projects on the 2D grid, which has no sidewall model"))
     end
+    # Before the resume below changes the problem and before any epoch: a 2D problem without the DCT-I filter cannot run.
+    require_dct_filter_problem(prob, "optimize!"; use_constraints)
     epigraph_config = _epigraph_config(robust_mode, epigraph_tol, epigraph_sigma,
                                        prob.control.b1, epigraph_linewidth_tol)
     with_run_logger(prob.pde.env.logger_cfg; root=prob.root) do
@@ -695,6 +724,10 @@ end
 
 Run eigenvalue-based optimization with beta-continuation.
 Note: eigen sensitivities are TODO and will error during gradient evaluation.
+
+A foundry problem whose control has `use_dct=false` and `use_filter` on is refused with an `ArgumentError` before
+the first epoch sets `prob.control.β`. An empty `β_schedule` evaluates nothing and returns `(0.0, copy(prob.p))`
+as before, without the check.
 """
 function optimize!(prob::EigenOptimizationProblem;
     max_iter::Int=40,
@@ -702,6 +735,9 @@ function optimize!(prob::EigenOptimizationProblem;
     use_constraints::Bool=false,
     tol::Float64=1e-15)
 
+    # Before the first epoch sets prob.control.β: the 2D filter is reached by every evaluation. An empty schedule
+    # evaluates nothing.
+    isempty(β_schedule) || require_dct_filter_problem(prob, "optimize!"; use_constraints=false)
     with_run_logger(prob.pde.env.logger_cfg; root=prob.root) do
         p_opt = copy(prob.p)
         g_opt = 0.0
@@ -765,6 +801,7 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
         throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
     (isfinite(constraint_scale) && constraint_scale > 0) ||
         throw(ArgumentError("constraint_scale must be finite and > 0 (got $constraint_scale)"))
+    require_dct_filter_problem(prob, "run_epoch!"; use_constraints)
     backend === :nlopt || log_info(:epoch, "standalone CCSA dual solver"; epoch, dual_algorithm)
     if robust_mode === :epigraph
         backend === :nlopt &&

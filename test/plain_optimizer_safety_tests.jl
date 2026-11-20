@@ -8,7 +8,13 @@ using LinearAlgebra
 mutable struct FakeControl
     β::Float64
     b1::Float64
+    use_dct::Bool
+    use_filter::Bool
 end
+FakeControl(β, b1) = FakeControl(β, b1, true, true)
+# The 2D filter's refusal (production: Filtering2D.jl); the optimizer's own guard is what these tests exercise.
+require_dct_filter_2d(control, caller::AbstractString) =
+    control.use_dct ? nothing : throw(ArgumentError("$caller: use_dct=true required"))
 mutable struct OptimizationProblem
     p::Vector{Float64}
     g::Float64
@@ -145,7 +151,7 @@ function load_optimizer(path)
                              :_set_epoch_state!, :_run_epoch_standalone_epigraph!) &&
                     occursin("prob::OptimizationProblem", string(sig))) ||
                    name in (:_checkpoint_resume_progress, :_require_filter_revision, :_checkpoint_filter_revision,
-                            :_inherit_filter_revision!)
+                            :_inherit_filter_revision!, :require_dct_filter_problem)
                     Core.eval(@__MODULE__, ex)
                     push!(loaded,name)
                 end
@@ -155,9 +161,12 @@ function load_optimizer(path)
         foreach(visit,ex.args)
     end
     visit(parsed)
-    loaded == Set([:optimize!,:run_epoch!,:_run_epoch_standalone!,:linewidth_feasibility,
-                   :_set_epoch_state!,:_checkpoint_resume_progress,:_require_filter_revision,
-                   :_checkpoint_filter_revision,:_run_epoch_standalone_epigraph!,:_inherit_filter_revision!]) || error("missing production functions: $loaded")
+    # `require_dct_filter_problem` is loaded when the source defines it; a source without it (one from before the
+    # 2D filter refusal) still loads, so its optimizer runs every testset here and the refusal tests fail there.
+    required = Set([:optimize!,:run_epoch!,:_run_epoch_standalone!,:linewidth_feasibility,
+                     :_set_epoch_state!,:_checkpoint_resume_progress,:_require_filter_revision,
+                     :_checkpoint_filter_revision,:_run_epoch_standalone_epigraph!,:_inherit_filter_revision!])
+    issubset(required, loaded) || error("missing production functions: $(setdiff(required, loaded))")
 end
 end
 
@@ -584,4 +593,79 @@ end
             β_schedule=[8.0], robust_samples=[(0.0, 0.0)], robust_sharpness=bad)
         @test p.iteration == 0
     end
+end
+
+# regression: a 2D problem without the DCT-I filter is refused before the problem changes.
+@testset "use_dct=false is refused before optimize! and run_epoch! change the problem" begin
+    F.return_code[] = 5
+    populated() = begin
+        p = F.problem(); p.foundry_mode = true
+        p.control.use_dct = false
+        p.p .= [0.31, 0.62]; p.g = 7.5; p.iteration = 9
+        append!(p.g_history, [1.0, 2.0, 3.0]); p.g_best = 3.0; p.p_best .= [0.2, 0.8]
+        p
+    end
+    snapshot(p) = (copy(p.p), p.g, p.iteration, copy(p.g_history), p.g_best, copy(p.p_best), p.control.β, p.filter_revision)
+    # Refused with nothing changed, no checkpoint written, and neither the flat normalization nor the objective run.
+    refuses(f, p) = begin
+        before = snapshot(p)
+        empty!(F.checkpoints); F.g_at_first_eval[] = nothing
+        norm_before = F.norm_calls[]
+        err = try
+            f()
+            nothing
+        catch e
+            e
+        end
+        err isa ArgumentError && snapshot(p) == before && isempty(F.checkpoints) && F.g_at_first_eval[] === nothing &&
+            F.norm_calls[] == norm_before
+    end
+    # Filter or constraints reach the 2D filter: refused, nothing touched (a fresh history would have been emptied).
+    for kwargs in ((; use_constraints=false), (; use_constraints=true))
+        for backend in (:nlopt, :standalone_mma, :standalone_ccsaq)
+            p = populated()
+            @test refuses(() -> F.optimize!(p; backend, max_iter=5, β_schedule=[8.0], backup=true,
+                backup_every=0, backup_path="injected", kwargs...), p)
+            p = populated()
+            @test refuses(() -> F.run_epoch!(p, 5, kwargs.use_constraints, 1e-15; backend), p)
+        end
+    end
+    # Filtering off and no constraints: the 2D filter is never reached, so the run is allowed.
+    p = populated(); p.control.use_filter = false
+    g, design = F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0])
+    @test length(design) == 2
+    # Filtering off with constraints: the linewidth constraints filter, so this is refused.
+    p = populated(); p.control.use_filter = false
+    @test refuses(() -> F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], use_constraints=true), p)
+    # regression: with two β epochs and backups the first, unconstrained epoch would write a checkpoint before the
+    # constrained last epoch reached the filter; the refusal comes before that checkpoint.
+    p = populated(); p.control.use_filter = false
+    @test refuses(() -> F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0, 16.0],
+        use_constraints=true, backup=true, backup_every=0, backup_path="injected"), p)
+    # A resume would load the checkpoint into the problem first: refused before that load.
+    F.resume_state[] = (; p=[0.9, 0.9], g=1.0, iteration=3, metadata=nothing)
+    p = populated()
+    @test refuses(() -> F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0],
+        resume_from="injected"), p)
+    F.resume_state[] = nothing
+    # regression: a resume whose checkpoint has completed every epoch would evaluate nothing, but optimize! checks the
+    # requested configuration before it loads any checkpoint, so it is refused as well.
+    F.resume_state[] = (; p=[0.9, 0.9], g=1.5, iteration=5,
+        metadata=resume_md(current_epoch=1, epoch_evals=5, g_norm=2.0))
+    p = populated()
+    F.resume_kwargs[] = nothing
+    @test refuses(() -> F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0],
+        resume_from="injected"), p)
+    @test F.resume_kwargs[] === nothing      # the checkpoint was never loaded
+    # The same completed resume with use_dct=true returns the saved score and design and evaluates nothing.
+    p = populated(); p.control.use_dct = true
+    norm_before = F.norm_calls[]; F.g_at_first_eval[] = nothing
+    g, design = F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], resume_from="injected")
+    @test g == 1.5 && design == [0.9, 0.9]
+    @test F.norm_calls[] == norm_before && F.g_at_first_eval[] === nothing
+    F.resume_state[] = nothing
+    # 3D problems never read use_dct.
+    p = populated(); p.foundry_mode = false
+    g, design = F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0])
+    @test length(design) == 2
 end

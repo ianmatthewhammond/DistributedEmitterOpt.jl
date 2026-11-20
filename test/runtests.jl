@@ -14,6 +14,10 @@ using Test
         include("constraint_tests.jl")
     end
 
+    @testset "2D Filter Selection Tests" begin
+        include("fft_filter_tests.jl")
+    end
+
     @testset "Constrained Optimization Tests" begin
         include("constrained_optimization_tests.jl")
     end

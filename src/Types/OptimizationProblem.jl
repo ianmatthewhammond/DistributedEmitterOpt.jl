@@ -331,8 +331,13 @@ Randomize design parameters using legacy initialization behavior.
 Legacy `rand` init used a filtered random field with fixed radius 20 nm:
 - Foundry mode: conic filter + sharp tanh projection (β=1028, η=0.5)
 - 3D mode: Helmholtz filter solve only
+
+A foundry problem whose control has `use_dct=false` is refused with an `ArgumentError`, before the random number
+generator is seeded or the design is touched (the 2D filter needs `use_dct=true`).
 """
 function init_random!(prob::OptimizationProblem; seed=nothing)
+    # Before the global RNG is seeded or drawn from: the 2D filter below needs `use_dct=true`.
+    require_dct_filter_problem(prob, "init_random!")
     !isnothing(seed) && Random.seed!(seed)
     sim0 = default_sim(prob.sim)
     p_rand = rand(length(prob.p))
