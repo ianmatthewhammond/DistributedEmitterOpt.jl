@@ -43,7 +43,8 @@ _epigraph_config(args...) = nothing
 _robust_sharpness_record(args...) = nothing
 with_run_logger(f; kwargs...) = f()
 with_run_logger(f, config; kwargs...) = f()
-flat_substrate_norm(prob) = (prob === nothing || (prob.g = 999.0); 2.0)   # production's flat evaluation overwrites prob.g
+const norm_calls = Ref(0)   # counts flat evaluations, the first thing optimize! does after its checks
+flat_substrate_norm(prob) = (norm_calls[] += 1; prob === nothing || (prob.g = 999.0); 2.0)   # production's flat evaluation overwrites prob.g
 log_info(args...; kwargs...) = nothing
 log_debug(args...; kwargs...) = nothing
 const warnings = Any[]
@@ -214,7 +215,7 @@ end
 begin
     @testset "raw tolerance reaches both standalone constraints" begin
         F.return_code[] = 5
-        for backend in (:standalone_mma,:standalone_ccsaq), raw in (1e-8,6e-14), cs in (1.0,1e8)
+        for backend in (:standalone_mma,:standalone_ccsaq), raw in (1e-8,6e-14), cs in (1.0,1e8,1e-3)
             p=F.problem(); p.foundry_mode=true
             F.optimize!(p;backend,max_iter=5,β_schedule=[Inf],use_constraints=true,
                 constraint_tol_raw=raw,constraint_scale=cs)
@@ -236,6 +237,128 @@ begin
         @test_throws ArgumentError F.optimize!(F.problem();backend=:standalone_mma,
             robust_mode=:epigraph, constraint_tol_raw=6e-14)
     end
+end
+
+@testset "zero, negative and nonfinite constraint scales are refused before any backend runs" begin
+    # The standalone foundry constraints multiply value, gradient and tolerance by the
+    # scale: zero would erase both linewidth constraints and a negative factor would
+    # reverse them. The scale is checked for every backend, with or without constraints.
+    # Before the fix, for the standalone backends, the `err isa ArgumentError`,
+    # `p.iteration == 0`, `captured_constraints === nothing` and `isempty(checkpoints)`
+    # assertions fail: optimize! and run_epoch! accept the scale and run the backend. For
+    # :nlopt (not loaded in this fixture) only the ArgumentError assertion fails there.
+    F.return_code[] = 5
+    refused(f) = try f(); nothing catch err; err end
+    for bad in (0.0, -0.0, -1.0, NaN, Inf, -Inf)
+        for (backend, cons) in ((:standalone_mma, true), (:standalone_ccsaq, true),
+                                (:standalone_mma, false), (:nlopt, true))
+            F.MmaccsaBackend.captured_constraints[] = nothing
+            empty!(F.checkpoints)
+            p = F.problem(); p.foundry_mode = true
+            err = refused(() -> F.optimize!(p; backend, max_iter=5, β_schedule=[8.0, Inf],
+                use_constraints=cons, constraint_scale=bad, backup=true, backup_every=0,
+                backup_path="injected"))
+            @test err isa ArgumentError && occursin("constraint_scale", sprint(showerror, err))
+            @test p.iteration == 0 && p.p == [0.4, 0.6]
+            @test F.MmaccsaBackend.captured_constraints[] === nothing
+            @test isempty(F.checkpoints)
+        end
+        for backend in (:standalone_mma, :standalone_ccsaq)
+            F.MmaccsaBackend.captured_constraints[] = nothing
+            p = F.problem(); p.foundry_mode = true
+            err = refused(() -> F.run_epoch!(p, 5, true, 1e-6; backend, epoch=1,
+                constraint_scale=bad))
+            @test err isa ArgumentError && occursin("constraint_scale", sprint(showerror, err))
+            @test p.iteration == 0
+            @test F.MmaccsaBackend.captured_constraints[] === nothing
+        end
+    end
+end
+
+# regression: a refused scale must leave a problem that has already run untouched. Without the guard in
+# optimize!, run_epoch! still throws, but only after optimize! has normalized, reset the
+# iteration and cleared the history and best record.
+@testset "a refused constraint_scale leaves a populated problem and its checkpoint untouched" begin
+    F.return_code[] = 5
+    for bad in (0.0, -0.0, -1.0, NaN, Inf, -Inf), resume in (false, true)
+        p = F.problem(); p.foundry_mode = true
+        F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], use_constraints=true)
+        @test p.iteration == 5 && !isempty(p.g_history) && p.g_best > -Inf
+        # State a refusal must not touch, with a sentinel for every later step.
+        before = (iteration=p.iteration, g_history=copy(p.g_history), g_best=p.g_best,
+                  p_best=copy(p.p_best), p=copy(p.p), g=p.g, ∇g=copy(p.∇g),
+                  filter_revision=p.filter_revision, β=p.control.β)
+        ckpt = tempname()
+        write(ckpt, "sentinel checkpoint bytes")
+        bytes = read(ckpt)
+        empty!(F.checkpoints)
+        F.norm_calls[] = 0
+        F.resume_kwargs[] = :untouched
+        F.resume_state[] = (p=[0.9, 0.9], g=7.0, iteration=3, metadata=nothing)
+        F.MmaccsaBackend.captured_constraints[] = nothing
+        err = try
+            F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0, Inf],
+                use_constraints=true, constraint_scale=bad, backup=true, backup_every=0,
+                backup_path=ckpt, resume_from=(resume ? ckpt : nothing))
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("constraint_scale", sprint(showerror, err))
+        @test F.norm_calls[] == 0                       # no normalization ran
+        @test F.resume_kwargs[] === :untouched          # no checkpoint was loaded
+        @test p.iteration == before.iteration
+        @test p.g_history == before.g_history
+        @test p.g_best == before.g_best && p.p_best == before.p_best
+        @test p.p == before.p && p.g == before.g && p.∇g == before.∇g
+        @test p.filter_revision == before.filter_revision && p.control.β == before.β
+        @test F.MmaccsaBackend.captured_constraints[] === nothing
+        @test isempty(F.checkpoints)
+        @test read(ckpt) == bytes
+        rm(ckpt)
+    end
+end
+
+# The same for the epoch entry point: a populated problem is not changed by a refused epoch.
+@testset "run_epoch! refuses a bad constraint_scale without touching a populated problem" begin
+    F.return_code[] = 5
+    for bad in (0.0, -0.0, -1.0, NaN, Inf, -Inf), backend in (:standalone_mma, :standalone_ccsaq)
+        p = F.problem(); p.foundry_mode = true
+        F.optimize!(p; backend=:standalone_mma, max_iter=5, β_schedule=[8.0], use_constraints=true)
+        before = (iteration=p.iteration, g_history=copy(p.g_history), g_best=p.g_best,
+                  p_best=copy(p.p_best), p=copy(p.p), g=p.g)
+        empty!(F.checkpoints)
+        F.MmaccsaBackend.captured_constraints[] = nothing
+        err = try
+            F.run_epoch!(p, 5, true, 1e-6; backend, epoch=1, constraint_scale=bad)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("constraint_scale", sprint(showerror, err))
+        @test (p.iteration, p.g_history, p.g_best, p.p_best, p.p, p.g) ==
+              (before.iteration, before.g_history, before.g_best, before.p_best, before.p, before.g)
+        @test F.MmaccsaBackend.captured_constraints[] === nothing
+        @test isempty(F.checkpoints)
+    end
+end
+
+# regression: the public text says exactly what each path does.
+@testset "the optimize! docstring states which quantities each path scales" begin
+    src = read(isempty(ARGS) ? joinpath(@__DIR__, "../src/Optimization/Optimizer.jl") : ARGS[1], String)
+    a = first(findfirst("- `constraint_scale` --", src))
+    b = last(findfirst("reciprocal scale.", src))
+    doc = replace(src[a:b], r"\s+" => " ")
+    @test occursin("scales both linewidth values, both gradients and `constraint_tol_raw`", doc)
+    @test occursin("in exact arithmetic the feasible set is unchanged", doc)
+    @test occursin("plain/KS with `backend=:nlopt`, non-foundry standalone, or linewidths off: the constraint arithmetic ignores it", doc)
+    @test occursin("with linewidths off none are installed", doc)
+    @test occursin("epigraph with linewidths off: not used; any positive value is accepted", doc)
+    @test occursin("epigraph with foundry linewidths: must satisfy `constraint_scale * b1 == 1`", doc)
+    @test occursin("scales the linewidth value and the design gradient", doc)
+    @test occursin("`epigraph_linewidth_tol` is passed to the backend unscaled", doc)
+    @test occursin("a non-foundry epigraph epoch with linewidths is refused by an existing check, even with the reciprocal scale", doc)
+    @test !occursin("requires it to equal `1/b1`", doc)
 end
 
 @testset "the returned design's linewidth feasibility is checked and reported" begin
