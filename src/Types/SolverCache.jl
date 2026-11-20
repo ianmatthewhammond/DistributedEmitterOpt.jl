@@ -29,6 +29,7 @@ Separate caches for:
 ## Fields
 - `A_factor` — Maxwell LU factorization
 - `F_factor` — Filter Helmholtz LU factorization
+- `F_key` — Operator the filter factorization was built for (radii, filtered FE space and the two filter measures), or `nothing`
 - `E2_factor` — E² regularization LU factorization (optional)
 - `x` — Solution vector cache
 - `am_head` — True if this process performs solves (MPI compatibility)
@@ -37,13 +38,14 @@ Separate caches for:
 mutable struct SolverCache{S<:AbstractSolver}
     A_factor::Any              # Maxwell LU
     F_factor::Any              # Filter LU
+    F_key::Any                 # (R, space, dΩ_design, dΩ) that F_factor was assembled for
     E2_factor::Any             # E² filter LU (optional)
     x::Vector{ComplexF64}      # Solution vector
     am_head::Bool              # MPI head flag
     solver::S
 
     function SolverCache{S}(solver::S; am_head::Bool=true) where S<:AbstractSolver
-        new{S}(nothing, nothing, nothing, ComplexF64[], am_head, solver)
+        new{S}(nothing, nothing, nothing, nothing, ComplexF64[], am_head, solver)
     end
 end
 
@@ -93,8 +95,13 @@ function eigen_solve_adjoint!(cache::SolverCache, b::Vector)
     solve_adjoint!(cache.solver, cache.A_factor, b)
 end
 
-"""Factorize filter Helmholtz matrix."""
+"""
+Factorize filter Helmholtz matrix into `cache.F_factor`. The operator key `cache.F_key` is
+cleared, because this method does not know which radii, space or measures `A` came from;
+`ensure_filter_factor!` sets the key after it installs a factor.
+"""
 function filter_lu!(cache::SolverCache, A)
+    cache.F_key = nothing
     if isnothing(cache.F_factor)
         cache.F_factor = filter_lu!(cache.solver, A)
     else
@@ -125,6 +132,21 @@ end
 has_maxwell_factor(cache::SolverCache) = !isnothing(cache.A_factor)
 has_filter_factor(cache::SolverCache) = !isnothing(cache.F_factor)
 has_eigen_factor(cache::SolverCache) = !isnothing(cache.A_factor)
+
+"""
+    clear_filter_factor!(cache) -> cache
+
+Release the filter factorization and forget the operator it was built for. The factor and
+its key are detached from the cache before the backend releases the factor, so a release
+that throws still leaves the cache empty (the error propagates).
+"""
+function clear_filter_factor!(cache::SolverCache)
+    F = cache.F_factor
+    cache.F_factor = nothing
+    cache.F_key = nothing
+    isnothing(F) || release_factor!(cache.solver, F)
+    return cache
+end
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Cache Pool — deduplicates caches by (λ, θ, polarization) key
@@ -197,30 +219,30 @@ function clear_eigen_factors!(pool::SolverCachePool)
     pool.eigen_shift = nothing
 end
 
-"""Empty the cache pool (remove all cached solvers)."""
+"""
+Empty the cache pool (remove all cached solvers). Releases the Maxwell, filter and E² factors
+of each per-configuration cache, the filter factor of `filter_cache`, and the shift-invert
+factor and the filter factor of `eigen_cache`. Each filter factor is cleared together with its
+key, since any of these caches can be passed to the Helmholtz filter.
+"""
 function Base.empty!(pool::SolverCachePool)
     for cache in values(pool.caches)
         if !isnothing(cache.A_factor)
             release_factor!(cache.solver, cache.A_factor)
             cache.A_factor = nothing
         end
-        if !isnothing(cache.F_factor)
-            release_factor!(cache.solver, cache.F_factor)
-            cache.F_factor = nothing
-        end
+        clear_filter_factor!(cache)
         if !isnothing(cache.E2_factor)
             release_factor!(cache.solver, cache.E2_factor)
             cache.E2_factor = nothing
         end
     end
-    if !isnothing(pool.filter_cache.F_factor)
-        release_factor!(pool.filter_cache.solver, pool.filter_cache.F_factor)
-        pool.filter_cache.F_factor = nothing
-    end
+    clear_filter_factor!(pool.filter_cache)
     if !isnothing(pool.eigen_cache.A_factor)
         release_factor!(pool.eigen_cache.solver, pool.eigen_cache.A_factor)
         pool.eigen_cache.A_factor = nothing
     end
+    clear_filter_factor!(pool.eigen_cache)
     pool.eigen_shift = nothing
     empty!(pool.caches)
 end

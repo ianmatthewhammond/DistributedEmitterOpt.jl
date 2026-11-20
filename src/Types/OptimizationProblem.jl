@@ -362,12 +362,8 @@ function init_random!(prob::OptimizationProblem; seed=nothing)
         end
         prob.p .= M \ b
         prob.p .= clamp.(prob.p, 0.0, 1.0)
-
-        # Avoid stale filter factor when optimization uses a different filter radius.
-        if prob.control.R_filter != legacy_R && !isnothing(cache.F_factor)
-            release_factor!(cache.solver, cache.F_factor)
-            cache.F_factor = nothing
-        end
+        # The filter factor is keyed by radius: the next filter call at another radius
+        # refactorizes, and a factor held from an earlier radius was not used above.
     end
     return prob
 end
