@@ -322,8 +322,24 @@ Keyword arguments:
 - `backup_every` -- autosave interval (iterations)
 - `backup_path` -- optional checkpoint path (default `joinpath(prob.root, "results_backup.jld2")`)
 - `resume_from` -- optional checkpoint path to resume from
-- `constraint_scale` -- multiply constraint values, gradients, and tolerances by this
-  factor (default 1.0, no-op). A pure reparameterization: the feasible set is unchanged.
+- `constraint_scale` -- scale of the foundry-mode linewidth constraints (default 1.0, no-op).
+  Must be finite and > 0 whatever the backend or `use_constraints`; zero would erase the
+  constraints and a negative factor would reverse them, so any other value throws an
+  `ArgumentError` before the problem, history, checkpoints or any backend are touched.
+  What a valid value does depends on the path:
+  - plain/KS (`robust_mode=:ks` or no robust samples) with standalone MMA or CCSAQ
+    (`:standalone_mma`, `:standalone_ccsaq`) and foundry linewidths: scales both linewidth
+    values, both gradients and `constraint_tol_raw`, a pure reparameterization (in exact
+    arithmetic the feasible set is unchanged).
+  - plain/KS with `backend=:nlopt`, non-foundry standalone, or linewidths off: the constraint
+    arithmetic ignores it (callbacks and raw tolerances are unscaled; with linewidths off none
+    are installed).
+  - epigraph with linewidths off: not used; any positive value is accepted.
+  - epigraph with foundry linewidths: must satisfy `constraint_scale * b1 == 1` (relative
+    tolerance 1e-12), else an `ArgumentError`. It scales the linewidth value and the design
+    gradient; `epigraph_linewidth_tol` is passed to the backend unscaled.
+  - a non-foundry epigraph epoch with linewidths is refused by an existing check, even with
+    the reciprocal scale.
   Set large (e.g. 1e8) for constrained β=Inf epochs, where the raw constraint terms
   (~1e-6) are otherwise below one ULP of the objective inside the CCSA dual and the
   dual line search fails (ret=-1). Known issue at constrained β=Inf, independent of
@@ -331,8 +347,8 @@ Keyword arguments:
   epoch's learned trust-region state.
 - `constraint_tol_raw` -- absolute tolerance on each plain-path linewidth constraint
   M - b1 (default 1e-8, preserving legacy behavior). For an EPS-relative tolerance
-  use e.g. 0.01 * prob.control.b1. Multiplied by constraint_scale in the standalone
-  foundry path. Stored and checked on resume; epigraph mode has its own tolerances.
+  use e.g. 0.01 * prob.control.b1. Multiplied by constraint_scale only on the plain/KS
+  standalone foundry path. Stored and checked on resume; epigraph mode has its own tolerances.
 - `ccsa_verbose` -- verbosity level passed through to the standalone CCSA backend
 - `dual_algorithm` -- solver for the standalone backends' CCSA dual subproblem: `:mma`
   (default, as in upstream NLopt) or `:lbfgs` (Luksan PLIS). Ignored by `backend=:nlopt`.
@@ -411,6 +427,8 @@ function optimize!(prob::OptimizationProblem;
         throw(ArgumentError("dual_algorithm must be :mma or :lbfgs (got :$dual_algorithm)"))
     (isfinite(constraint_tol_raw) && constraint_tol_raw >= 0) ||
         throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
+    (isfinite(constraint_scale) && constraint_scale > 0) ||
+        throw(ArgumentError("constraint_scale must be finite and > 0 (got $constraint_scale)"))
     if robust_samples !== nothing && robust_mode === :ks
         (robust_sharpness > 0 && !isnan(robust_sharpness)) ||
             throw(ArgumentError("robust_sharpness must be > 0 (Inf for the exact minimum), got $robust_sharpness"))
@@ -745,6 +763,8 @@ function run_epoch!(prob::OptimizationProblem, max_iter::Int, use_constraints::B
 
     (isfinite(constraint_tol_raw) && constraint_tol_raw >= 0) ||
         throw(ArgumentError("constraint_tol_raw must be finite and nonnegative"))
+    (isfinite(constraint_scale) && constraint_scale > 0) ||
+        throw(ArgumentError("constraint_scale must be finite and > 0 (got $constraint_scale)"))
     backend === :nlopt || log_info(:epoch, "standalone CCSA dual solver"; epoch, dual_algorithm)
     if robust_mode === :epigraph
         backend === :nlopt &&
