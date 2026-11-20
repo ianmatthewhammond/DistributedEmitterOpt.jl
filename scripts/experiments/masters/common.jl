@@ -57,6 +57,17 @@ end
 Setup a masters thesis problem instance.
 """
 function setup_masters_problem(cfg::MastersConfig)
+    # Objective first: it validates its settings, so a refusal happens before any mesh file is written.
+    αₚ = cfg.anisotropic ? anisotropic_tensor() : Matrix{ComplexF64}(I, 3, 3)
+
+    objective = SERSObjective(
+        αₚ=αₚ,
+        volume=true,
+        surface=false,
+        use_damage_model=cfg.nonlinear,
+        E_threshold=cfg.E_threshold
+    )
+
     # 1. Geometry
     # Thesis typically uses SymmetricGeometry
     geo = SymmetricGeometry()
@@ -117,17 +128,6 @@ function setup_masters_problem(cfg::MastersConfig)
     end
 
     pde = MaxwellProblem(env=env, inputs=[pump], outputs=outputs)
-
-    # 4. Objective
-    αₚ = cfg.anisotropic ? anisotropic_tensor() : Matrix{ComplexF64}(I, 3, 3)
-
-    objective = SERSObjective(
-        αₚ=αₚ,
-        volume=true,
-        surface=false,
-        use_damage_model=cfg.nonlinear,
-        E_threshold=cfg.E_threshold
-    )
 
     # 5. Control
     control = Control(

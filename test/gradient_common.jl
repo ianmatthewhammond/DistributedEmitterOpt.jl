@@ -109,9 +109,6 @@ function build_test_problem(;
         g
     end
 
-    meshfile = tempname() * ".msh"
-    genmesh(geo, meshfile; per_x=false, per_y=false)
-
     # Physics: Ag/Ag/1.33 match experiments
     env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
 
@@ -138,6 +135,10 @@ function build_test_problem(;
         t_shell=t_shell,
         ε_grad=ε_grad
     )
+
+    # The objective is built first (it validates its settings), so a refusal leaves no mesh file behind.
+    meshfile = tempname() * ".msh"
+    genmesh(geo, meshfile; per_x=false, per_y=false)
 
     # IO Configuration
     inputs = [FieldConfig(λ_pump; θ=θ, pol=:y)] # Pump Y (consistent with symmetry)
