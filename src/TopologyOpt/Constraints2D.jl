@@ -52,7 +52,7 @@ across a wall is:
   there); the cell is `f` without it. No filter of this package returns a halo any more;
 - otherwise, with `mirror` (a Bool or an (x, y) pair) set, the reflected inner node, so the normal
   derivative on the wall is zero: the DCT-I filter, whose walls are mirrors for a kernel of any size;
-- otherwise the node on the opposite edge: a periodic cell of the cell's size, as `convolvefft` tiles it.
+- otherwise the node on the opposite edge: a periodic cell of the cell's size.
 """
 function gradient_sq(f::AbstractMatrix, resolution::Float64; mirror, halo::NTuple{2,Bool}=(false, false))
     mx, my = mirror isa Bool ? (mirror, mirror) : mirror
@@ -143,8 +143,10 @@ flatten(x) = vec(x)
     glc_solid(x, grad; sim, control) -> Float64
 
 Solid linewidth constraint for NLopt. Constraint satisfied when ≤ 0.
+It filters with the DCT-I conic filter; a control with `use_dct=false` is refused with an `ArgumentError`.
 """
 function glc_solid(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
+    require_dct_filter_2d(control, "glc_solid")
     nx, ny = length(sim.grid.x), length(sim.grid.y)
     Lx = sim.grid.x[end] - sim.grid.x[1]
     Ly = sim.grid.y[end] - sim.grid.y[1]
@@ -154,9 +156,9 @@ function glc_solid(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     R = control.R_filter[1]
     h = conic_filter(R, Lx, Ly, resolution)
     # DCT-I's walls are mirrors on every axis (a kernel longer than the cell is folded onto it, see
-    # `fold_axis_dcti`), so `dcti_tiled` is (false, false) and no halo is used; the FFT filter is periodic.
-    halo = control.use_dct ? dcti_tiled((nx, ny), size(h)) : (false, false)
-    filter_f = p -> control.use_dct ? convolvedcti(p; h, halo=any(halo)) : convolvefft(p; h)
+    # `fold_axis_dcti`), so `dcti_tiled` is (false, false) and no halo is used.
+    halo = dcti_tiled((nx, ny), size(h))
+    filter_f = p -> convolvedcti(p; h, halo=any(halo))
     threshold_f = p -> smoothed_projection(p, control, sim)
 
     # Hyperparameters
@@ -168,7 +170,7 @@ function glc_solid(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     p = reshape(x, (nx, ny))
 
     # Objective
-    M1 = p -> control_solid(p; c0, ηe, filter_f, threshold_f, resolution, mirror=control.use_dct, halo)
+    M1 = p -> control_solid(p; c0, ηe, filter_f, threshold_f, resolution, mirror=true, halo)
 
     # Gradient via Zygote
     if length(grad) > 0
@@ -182,9 +184,11 @@ end
 """
     glc_void(x, grad; sim, control) -> Float64
 
-Void linewidth constraint for NLopt.
+Void linewidth constraint for NLopt. Constraint satisfied when ≤ 0.
+It filters with the DCT-I conic filter; a control with `use_dct=false` is refused with an `ArgumentError`.
 """
 function glc_void(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
+    require_dct_filter_2d(control, "glc_void")
     nx, ny = length(sim.grid.x), length(sim.grid.y)
     Lx = sim.grid.x[end] - sim.grid.x[1]
     Ly = sim.grid.y[end] - sim.grid.y[1]
@@ -194,9 +198,9 @@ function glc_void(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     R = control.R_filter[1]
     h = conic_filter(R, Lx, Ly, resolution)
     # DCT-I's walls are mirrors on every axis (a kernel longer than the cell is folded onto it, see
-    # `fold_axis_dcti`), so `dcti_tiled` is (false, false) and no halo is used; the FFT filter is periodic.
-    halo = control.use_dct ? dcti_tiled((nx, ny), size(h)) : (false, false)
-    filter_f = p -> control.use_dct ? convolvedcti(p; h, halo=any(halo)) : convolvefft(p; h)
+    # `fold_axis_dcti`), so `dcti_tiled` is (false, false) and no halo is used.
+    halo = dcti_tiled((nx, ny), size(h))
+    filter_f = p -> convolvedcti(p; h, halo=any(halo))
     threshold_f = p -> smoothed_projection(p, control, sim)
 
     # Hyperparameters
@@ -208,7 +212,7 @@ function glc_void(x::Vector{Float64}, grad::Vector{Float64}; sim, control)
     p = reshape(x, (nx, ny))
 
     # Objective
-    M2 = p -> control_void(p; c0, ηd, filter_f, threshold_f, resolution, mirror=control.use_dct, halo)
+    M2 = p -> control_void(p; c0, ηd, filter_f, threshold_f, resolution, mirror=true, halo)
 
     # Gradient via Zygote
     if length(grad) > 0

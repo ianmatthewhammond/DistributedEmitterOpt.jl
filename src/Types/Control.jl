@@ -7,7 +7,34 @@ and linewidth constraints.
 ## Filtering
 - `use_filter` — Enable filtering step
 - `R_filter` — Filter radius (rx, ry, rz) in nm
-- `use_dct` — Use DCT convolution (true) or Helmholtz PDE (false)
+- `use_dct` — Select the 2D convolution filter; must be `true` for 2D designs (see below)
+
+The filter depends on where the design lives, not on `use_dct` alone:
+- 2D designs (`foundry_mode=true`, design on the `(x, y)` grid): a conic kernel of radius
+  `R_filter[1]` applied by DCT-I convolution, whose walls are mirrors. The design filter
+  (`filter_grid`), its adjoint (`filter_grid_adjoint`) and the linewidth constraints
+  (`glc_solid`, `glc_void`) all use it. `use_dct=false` is not supported here: those
+  functions throw an `ArgumentError` asking for `use_dct=true` (`filter_grid` and its
+  adjoint only when `use_filter` is on). So do the entry points that reach them, before
+  they change the problem, its caches, the control or any output:
+  - `optimize!` and `run_epoch!` for an `OptimizationProblem`, when `use_filter` is on or
+    linewidth constraints are requested;
+  - `init_random!` always (its random field is filtered whatever `use_filter` says);
+  - `optimize!` and `objective_and_gradient!` for an `EigenOptimizationProblem`,
+    `spectral_sweep`, `fabrication_sweep` and `visualize_results`, when `use_filter` is on;
+  - `robust_sidewall_samples!` and `robust_sidewall_objective!` for these two problem types,
+    when `use_filter` is on (a custom problem with its own `objective_and_gradient!` is
+    not checked).
+  Three calls that evaluate nothing are not checked and return as before: the eigen
+  `optimize!` with an empty `β_schedule`, and either sweep with `points=0`. The
+  `OptimizationProblem` `optimize!` checks the requested configuration before it loads a
+  checkpoint, so `resume_from` a checkpoint whose epochs are all complete is refused as
+  well, even when no evaluation would be needed. `evaluate`, `test_gradient`
+  and `objective_and_gradient!` for an `OptimizationProblem` reach `filter_grid` first and
+  throw there when `use_filter` is on. There is no periodic FFT filter.
+- 3D designs (`foundry_mode=false`, design on the FE mesh): a Helmholtz PDE filter with the
+  anisotropic radii `R_filter = (rx, ry, rz)` (`filter_helmholtz!`). `use_dct` is ignored;
+  by convention 3D examples set `use_dct=false`.
 
 ## Projection / SSP
 - SSP on the FEM mesh is always used (pf → pt).

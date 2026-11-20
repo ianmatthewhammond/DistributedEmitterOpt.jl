@@ -1,7 +1,7 @@
 """
     Filtering2D
 
-DCT/FFT-based convolution filtering for 2D DOF mode.
+DCT-I convolution filtering for 2D DOF mode (mirror walls).
 Uses conic kernel for smooth, shift-invariant filtering.
 """
 
@@ -282,7 +282,7 @@ end
 Whether this foundry problem's 2D DCT-I filter (the design filter of `filter_grid` and the filter inside the
 length-scale constraints, both built from `control.R_filter[1]` on `sim.grid`) is one that filter revision 1 tiled
 by repetition, i.e. whether objective and constraint values computed before the kernel was folded belong to a
-different problem. False for the FFT filter and for every kernel that fits the cell.
+different problem. False for `use_dct=false` (refused by the 2D filter) and for every kernel that fits the cell.
 
 The test is conservative: it reproduces the old allocation rule (tiling whenever 2k − 1 > n along an axis, k counting
 the kernel array's zero padding), not an operator comparison. A kernel array that the old filter tiled although its
@@ -337,35 +337,24 @@ function convolvedcti_adjoint(x::Matrix{Float64}; h::Matrix{Float64})
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FFT convolution (general case)
+# 2D filter selection
 # ═══════════════════════════════════════════════════════════════════════════════
 
 """
-    convolvefft(x; h) -> Matrix
+    require_dct_filter_2d(control, caller)
 
-Convolve x with kernel h using FFT (general boundaries).
+Refuse `Control(use_dct=false)` on the 2D (foundry) grid. The DCT-I conic filter (`convolvedcti`) is the only 2D
+filter: the forward filter, its adjoint and both linewidth constraints use it. `use_dct=false` once selected a
+periodic FFT convolution here, which no longer ran; it is refused with this error instead. The 3D Helmholtz filter
+does not read `use_dct`.
 """
-function convolvefft(x::Matrix{Float64}; h::Matrix{Float64})
-    # Legacy repeat + symmetric pad path (matches old codebase behavior)
-    sx, sy = size(x)
-    kx, ky = size(h)
-
-    npx = Int(ceil((2 * kx - 1) / sx))
-    npy = Int(ceil((2 * ky - 1) / sy))
-    if npx % 2 == 0
-        npx += 1
-    end
-    if npy % 2 == 0
-        npy += 1
-    end
-
-    x_rep = repeat(x, outer=(npx, npy))
-    x_rep = edgepad(x_rep, ((0, 0), (0, 0)))
-    h_pad = properpad(h, (npx * sx, npy * sy))
-    h_pad ./= sum(h_pad)
-
-    xout = centeredfft(real.(FFTW.ifft(FFTW.fft(x_rep) .* FFTW.fft(h_pad))), (sx, sy))
-    return xout
+function require_dct_filter_2d(control, caller::AbstractString)
+    control.use_dct && return nothing
+    throw(ArgumentError(
+        "$caller: Control(use_dct=false) is not supported on the 2D design grid (foundry_mode=true). " *
+        "The 2D filter, its adjoint and the linewidth constraints use the DCT-I conic filter; " *
+        "set use_dct=true (the default). In 3D (foundry_mode=false) the Helmholtz PDE filter is used " *
+        "and use_dct is ignored."))
 end
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -375,7 +364,8 @@ end
 """
     filter_grid(p_vec, sim, control) -> Vector
 
-Filter design vector using 2D convolution.
+Filter design vector with the 2D DCT-I conic filter (mirror walls). A control with `use_dct=false` is refused
+with an `ArgumentError` (see `require_dct_filter_2d`) unless `use_filter` is off.
 
 ## Arguments
 - `p_vec` — Flat design vector
@@ -386,6 +376,7 @@ function filter_grid(p_vec::Vector{Float64}, sim, control)
     if !control.use_filter
         return copy(p_vec)
     end
+    require_dct_filter_2d(control, "filter_grid")
 
     # Get grid dimensions
     nx, ny = length(sim.grid.x), length(sim.grid.y)
@@ -394,23 +385,14 @@ function filter_grid(p_vec::Vector{Float64}, sim, control)
 
     # Build kernel
     R = control.R_filter[1]  # Use x-radius for 2D
-    h = if control.use_dct
-        resolution = (nx - 1) / Lx
-        conic_filter_dct(R, Lx, Ly, resolution)
-    else
-        resolution = (nx - 1) / Lx
-        conic_filter(R, Lx, Ly, resolution)
-    end
+    resolution = (nx - 1) / Lx
+    h = conic_filter_dct(R, Lx, Ly, resolution)
 
     # Reshape to 2D
     x = reshape(p_vec, (nx, ny))
 
     # Convolve
-    if control.use_dct
-        y = convolvedcti(x; h)
-    else
-        y = convolvefft(x; h)
-    end
+    y = convolvedcti(x; h)
 
     # Flatten back
     return vec(y)
@@ -419,27 +401,23 @@ end
 """
     filter_grid_adjoint(∂g_∂pf, sim, control) -> Vector
 
-Adjoint (transpose) of `filter_grid`. For the DCT-I filter this is `convolvedcti_adjoint`, which differs from the
-forward map at the walls (endpoint weights); only the periodic FFT filter with a symmetric kernel is its own transpose.
+Adjoint (transpose) of `filter_grid`: `convolvedcti_adjoint`, which differs from the forward map at the walls
+(DCT-I endpoint weights). Like `filter_grid`, it refuses `use_dct=false` unless `use_filter` is off.
 """
 function filter_grid_adjoint(∂g_∂pf::Vector{Float64}, sim, control)
     if !control.use_filter
         return copy(∂g_∂pf)
     end
+    require_dct_filter_2d(control, "filter_grid_adjoint")
 
     nx, ny = length(sim.grid.x), length(sim.grid.y)
     Lx = sim.grid.x[end] - sim.grid.x[1]
     Ly = sim.grid.y[end] - sim.grid.y[1]
     R = control.R_filter[1]
-    h = if control.use_dct
-        resolution = (nx - 1) / Lx
-        conic_filter_dct(R, Lx, Ly, resolution)
-    else
-        resolution = (nx - 1) / Lx
-        conic_filter(R, Lx, Ly, resolution)
-    end
+    resolution = (nx - 1) / Lx
+    h = conic_filter_dct(R, Lx, Ly, resolution)
 
     x = reshape(∂g_∂pf, (nx, ny))
-    y = control.use_dct ? convolvedcti_adjoint(x; h) : convolvefft(x; h)
+    y = convolvedcti_adjoint(x; h)
     return vec(y)
 end

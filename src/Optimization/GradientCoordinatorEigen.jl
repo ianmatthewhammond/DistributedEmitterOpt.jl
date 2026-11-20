@@ -11,9 +11,14 @@ Coordinates eigenvalue-based optimization:
     objective_and_gradient!(grad, p, prob::EigenOptimizationProblem) -> Float64
 
 Forward + eigen sensitivity pass. Dispatches on foundry_mode.
+
+A foundry problem whose control has `use_dct=false` and `use_filter` on is refused with an `ArgumentError` before
+the eigen factor is released (the 2D filter needs `use_dct=true`; see `Control`).
 """
 function objective_and_gradient!(∇g::Vector{Float64}, p::Vector{Float64},
     prob::EigenOptimizationProblem)
+    # Before the cached eigen factor and shift are released below.
+    require_dct_filter_problem(prob, "objective_and_gradient!"; use_constraints=false)
     clear_eigen_factors!(prob.pool)
     if prob.foundry_mode
         return compute_gradient_eigen_2d!(∇g, p, prob)

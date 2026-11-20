@@ -3,7 +3,7 @@ module Analysis
 using JLD2
 using Printf
 using CairoMakie
-import ..DistributedEmitterOpt: OptimizationProblem, FieldConfig, MaxwellProblem, evaluate, default_sim, sim_for, pool_for, get_cache!, build_phys_params, map_pt, assemble_maxwell, maxwell_lu!, assemble_source, maxwell_solve!, has_maxwell_factor, glc_solid, filter_grid, project_grid, pf_grid, project_ssp, build_foundry_pf, smoothed_projection_vec
+import ..DistributedEmitterOpt: OptimizationProblem, FieldConfig, MaxwellProblem, evaluate, default_sim, sim_for, pool_for, get_cache!, build_phys_params, map_pt, assemble_maxwell, maxwell_lu!, assemble_source, maxwell_solve!, has_maxwell_factor, glc_solid, filter_grid, project_grid, pf_grid, project_ssp, build_foundry_pf, smoothed_projection_vec, require_dct_filter_problem
 using Gridap
 using LinearAlgebra
 using Statistics
@@ -25,6 +25,10 @@ sumabs(a::CellField) = Operation(sumabs)(a)
 
 Sweep wavelength around a center value, re-evaluating the objective.
 Does not perform optimization, only analysis.
+
+A foundry problem whose control has `use_dct=false` and `use_filter` on is refused with an `ArgumentError` before
+`prob.pde` is replaced or any file is written. With `points=0` nothing is evaluated and the call returns empty
+results as before, without the check.
 """
 function spectral_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
     center_λ::Float64=532.0,
@@ -38,6 +42,9 @@ function spectral_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
     e = range(-1, 1; length=points)
     offsets = sign.(e) .* range_λ .* ((10 .^ abs.(e) .- 1) ./ (10 - 1))
     λ_s = sort(unique(center_λ .+ offsets))
+    # Before prob.pde is replaced below: a 2D problem without the DCT-I filter cannot be evaluated. With no
+    # wavelength nothing is evaluated.
+    isempty(λ_s) || require_dct_filter_problem(prob, "spectral_sweep"; use_constraints=false)
 
     # Store results
     gys = zeros(length(λ_s))
@@ -124,6 +131,10 @@ Sweep filter radius (or threshold) to simulate fabrication errors.
 
 The sweep evaluates `p_opt` at each radius on `prob`. On return, normal or by an error,
 `prob.control.R_filter`, `prob.g` and `prob.∇g` hold the values they had before the call.
+
+A foundry problem whose control has `use_dct=false` and `use_filter` on is refused with an `ArgumentError` before
+`prob.control.R_filter` is changed or any file is written. With `points=0` nothing is evaluated and the call returns
+empty results as before, without the check.
 """
 function fabrication_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
     center_R::Float64=20.0,
@@ -134,6 +145,8 @@ function fabrication_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
 )
     # Sweep filter radius R_filter (assuming isotropic x/y/z)
     Rs = range(center_R - range_R, center_R + range_R, length=points)
+    # Before prob.control.R_filter is changed below. With no radius nothing is evaluated.
+    isempty(Rs) || require_dct_filter_problem(prob, "fabrication_sweep"; use_constraints=false)
 
     gys = zeros(length(Rs))
 
@@ -183,8 +196,13 @@ end
     visualize_results(prob, p_opt; root)
 
 Generate VTK and PNG outputs for the final design.
+
+A foundry problem whose control has `use_dct=false` and `use_filter` on is refused with an `ArgumentError` before
+anything is printed or written.
 """
 function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; root::String=prob.root)
+    # Before the announcement below and before any file is written.
+    require_dct_filter_problem(prob, "visualize_results"; use_constraints=false)
     println("Generating visualization artifacts in $root...")
 
     # 1. Get physical design pt on the mesh

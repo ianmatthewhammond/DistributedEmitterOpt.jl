@@ -112,7 +112,12 @@ below and the epigraph form (`EpigraphSidewall.jl`), which needs the samples
 separately because each one is its own constraint.
 
 Mutates `prob.control`'s sidewall fields per sample and restores them on exit
-(including on error).
+(including on error). For the package's problem types (`OptimizationProblem`,
+`EigenOptimizationProblem`), a foundry problem whose control has `use_dct=false` and
+`use_filter` on is refused with an `ArgumentError` before any field is changed or any
+sample evaluated (see `Control`). Any other `prob` needs only a `control` field and its
+own `objective_and_gradient!` method; it is not checked, because this function does not
+know whether its evaluation reaches the 2D filter.
 
 Downstream caches must refresh when the projected material field changes between samples.
 """
@@ -124,6 +129,11 @@ function robust_sidewall_samples!(grads::Union{Nothing,AbstractVector{Vector{Flo
     n = length(samples)
     grads === nothing || length(grads) == n ||
         throw(ArgumentError("robust_sidewall_samples!: $(length(grads)) gradient buffers for $n samples"))
+    # Before the sidewall fields are set below: every sample's evaluation of a package problem reaches the 2D filter.
+    # A custom problem brings its own objective_and_gradient! and may have no foundry_mode field: not checked.
+    if prob isa Union{OptimizationProblem,EigenOptimizationProblem}
+        require_dct_filter_problem(prob, "robust_sidewall_samples!"; use_constraints=false)
+    end
     control = prob.control
     saved = (control.use_sidewall, control.sidewall_slope, control.sidewall_z0)
     gs = zeros(Float64, n)
@@ -149,7 +159,9 @@ end
 Evaluate the worst-case objective over `samples` and, when `∇g` is non-empty,
 its gradient: the KS softmin of `robust_sidewall_samples!`. Mutates
 `prob.control`'s sidewall fields per sample and restores them on exit
-(including on error).
+(including on error). Refuses `use_dct=false` on a foundry problem of the package's
+types as `robust_sidewall_samples!` does, before any field is changed; other problem
+types are evaluated as before.
 """
 function robust_sidewall_objective!(∇g::Vector{Float64}, p::Vector{Float64},
                                     prob, samples::AbstractVector{<:Tuple};
