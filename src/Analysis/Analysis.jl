@@ -121,6 +121,9 @@ end
     fabrication_sweep(prob, p_opt; center_R, range_R, points, root)
 
 Sweep filter radius (or threshold) to simulate fabrication errors.
+
+The sweep evaluates `p_opt` at each radius on `prob`. On return, normal or by an error,
+`prob.control.R_filter`, `prob.g` and `prob.∇g` hold the values they had before the call.
 """
 function fabrication_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
     center_R::Float64=20.0,
@@ -134,25 +137,31 @@ function fabrication_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
 
     gys = zeros(length(Rs))
 
-    # Save original control
+    # Save the caller's radius, score and gradient (evaluate overwrites the last two)
     original_R = prob.control.R_filter
+    original_g = prob.g
+    original_∇g = copy(prob.∇g)
 
     println("Starting fabrication sweep (R_filter) over $(length(Rs)) points...")
 
-    for (i, R) in enumerate(Rs)
-        # Update control
-        # We assume R_filter stored as tuple
-        prob.control.R_filter = (R, R, R)
+    try
+        for (i, R) in enumerate(Rs)
+            # Update control
+            # We assume R_filter stored as tuple
+            prob.control.R_filter = (R, R, R)
 
-        # Evaluate
-        val, _ = evaluate(prob, p_opt)
+            # Evaluate
+            val, _ = evaluate(prob, p_opt)
 
-        gys[i] = val
-        @printf "  R = %.2f nm, g = %.4e\n" R val
+            gys[i] = val
+            @printf "  R = %.2f nm, g = %.4e\n" R val
+        end
+    finally
+        # Restore on both exits
+        prob.control.R_filter = original_R
+        prob.g = original_g
+        prob.∇g .= original_∇g
     end
-
-    # Restore
-    prob.control.R_filter = original_R
 
     # Save
     JLD2.save(joinpath(root, "fabrication.jld2"), Dict("R" => Rs, "g" => gys))
