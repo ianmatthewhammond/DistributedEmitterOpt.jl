@@ -22,6 +22,10 @@ using Test
         include("objective_baselines_tests.jl")
     end
 
+    @testset "Damage Settings Tests" begin
+        include("damage_settings_tests.jl")
+    end
+
     @testset "Mesh Repair Tests" begin
         include("mesh_repair_tests.jl")
     end

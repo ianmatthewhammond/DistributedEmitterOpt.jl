@@ -43,7 +43,7 @@ const OBJECTIVE_BASELINES = Dict(
     "2D Foundry Anisotropic + Multi Output" => (len=289, norm=8.588540846480063, obj=1.0130235506433549e6),
     "2D Foundry Anisotropic" => (len=289, norm=8.588540846480063, obj=1.0102446065974964e6),
     "3D Surface Objective" => (len=813, norm=14.345340287591288, obj=1447.3803882181296),
-    "3D With Damage Model" => (len=813, norm=14.345340287591288, obj=106625.11391929301),
+    "3D With Damage Model" => (len=813, norm=14.345340287591288, obj=106625.11391929301),  # reference value left to #30
     "3D Elastic Baseline" => (len=813, norm=14.345340287591288, obj=106625.11391929301),
     "3D Anisotropic (Elastic)" => (len=813, norm=14.345340287591288, obj=114082.55721479755),
     "2D Foundry Inelastic" => (len=289, norm=8.588540846480063, obj=915937.6261181335),
@@ -124,7 +124,7 @@ function build_new_problem(case::CaseSpec, meshfile::String)
         surface=case.flag_surface,
         use_damage_model=case.use_damage,
         γ_damage=1.0,
-        E_threshold=10.0
+        E_threshold=case.use_damage ? 0.0 : 10.0
     )
     control = Control(
         use_filter=true,
@@ -139,7 +139,7 @@ function build_new_problem(case::CaseSpec, meshfile::String)
         flag_surface=case.flag_surface,
         use_damage=case.use_damage,
         γ_damage=1.0,
-        E_threshold=10.0
+        E_threshold=case.use_damage ? 0.0 : 10.0
     )
     solver = UmfpackSolver()
     return OptimizationProblem(pde, objective, meshfile, solver;
@@ -151,13 +151,13 @@ function build_new_problem(case::CaseSpec, meshfile::String)
 end
 
 @testset "Objective Baselines (New Code)" begin
-    mktempdir() do tmp
+    scores = Dict{String,Float64}(); mktempdir() do tmp
         for case in CASES
             base = OBJECTIVE_BASELINES[case.name]
             meshfile = joinpath(tmp, replace(case.name, " " => "_") * ".msh")
             prob = build_new_problem(case, meshfile)
             p = gen_p0(length(prob.p))
-            g = objective_and_gradient!(zeros(length(p)), p, prob)
+            g = objective_and_gradient!(zeros(length(p)), p, prob); scores[case.name] = g
 
             @test length(p) == base.len
             @test isapprox(norm(p), base.norm; rtol=1e-10, atol=0.0)
@@ -173,4 +173,11 @@ end
             rm(meshfile; force=true)
         end
     end
+
+    # The damage case uses E_threshold = 0.0 (the others 10.0, which the fields never reach, so that case
+    # used to score exactly like its elastic twin). At 0.0 the factor 1/(1 + exp(γ |E|²)) is at most 1/2
+    # everywhere. regression: damage on must change the score relative to the matched damage-off case
+    # (same geometry, polarization and outputs). The stored reference value of "3D With Damage Model"
+    # is left to #30; this check does not use it.
+    @test scores["3D With Damage Model"] < 0.99 * scores["3D Elastic Baseline"]
 end

@@ -7,8 +7,8 @@ over molecular region using SO(3)-averaged trace formulation.
 ## Fields
 - `αₚ` — 3×3 Raman polarizability tensor
 - `use_damage_model` — Enable molecular quenching
-- `γ_damage` — Damage model steepness
-- `E_threshold` — Damage threshold field magnitude
+- `γ_damage` — Damage model steepness; finite and > 0 when `use_damage_model=true`
+- `E_threshold` — Damage threshold field magnitude; ≥ 0 when `use_damage_model=true` (0 centres the attenuation at zero intensity), `Inf` means no damage
 - `volume` — Integrate over fluid volume
 - `surface` — Integrate over metal-fluid interface
 """
@@ -51,6 +51,25 @@ Base.@kwdef struct SERSObjective <: ObjectiveFunction
         else
             (isfinite(ε_grad) && ε_grad >= 0) ||
                 throw(ArgumentError("SERSObjective: ε_grad must be finite and >= 0, got $ε_grad"))
+        end
+        # Convert first (exactly the conversions `new` applies to the stored fields), then validate
+        # and store the converted values, so the check sees what the solver will use: a BigFloat
+        # beyond the Float64 range converts to ±Inf, one below it converts to 0.0.
+        use_damage_model = convert(Bool, use_damage_model)
+        γ_damage = convert(Float64, γ_damage)
+        E_threshold = convert(Float64, E_threshold)
+        # The damage factor 1 / (1 + exp(γ (E² - E_th²))) must attenuate at high intensity.
+        # NaN or ±Inf γ silently disables it, γ < 0 reverses it, and γ = 0 is a constant 1/2
+        # (no threshold), so require finite γ > 0. E_threshold = Inf is allowed and means no
+        # damage. E_threshold = 0 is allowed: the factor then attenuates from 1/2 at zero
+        # intensity, a valid active setting. Negative values are rejected (E_th enters squared,
+        # so a sign would only mislead), and so is NaN. Not checked when the model is off.
+        if use_damage_model
+            (isfinite(γ_damage) && γ_damage > 0) ||
+                throw(ArgumentError("SERSObjective: with use_damage_model=true, γ_damage must be finite and > 0, got $γ_damage"))
+            E_threshold >= 0 ||
+                throw(ArgumentError("SERSObjective: with use_damage_model=true, E_threshold must be >= 0 " *
+                                    "(Inf means no damage), got $E_threshold"))
         end
         new(αₚ, use_damage_model, γ_damage, E_threshold, volume, surface,
             surface_mode, t_shell, ε_grad, require_substrate, shell_cache)

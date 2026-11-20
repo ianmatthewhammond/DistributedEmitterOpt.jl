@@ -10,14 +10,15 @@ function angular_test_geometry(;resolution=15.0)
 end
 
 function angular_test_problem(inputs, outputs; damage=false, cell=:auto, resolution=15.0)
+    # Built before the mesh and recipe, so a refused setting leaves nothing behind.
+    obj = SERSObjective(volume=false,surface=true,surface_mode=:tv_void,t_shell=7.0,
+        use_damage_model=damage,γ_damage=4.0,E_threshold=0.0)
     geo = angular_test_geometry(;resolution)
     configs = vcat(inputs,outputs)
     sim = build_angular_simulation(geo,configs;
         meshfile=joinpath(mktempdir(),"angular.msh"),cell,design_shape=(7,7))
     env = Environment(mat_design="Ag",mat_substrate=1.77,mat_fluid=1.0)
     pde = MaxwellProblem(;env,inputs,outputs)
-    obj = SERSObjective(volume=false,surface=true,surface_mode=:tv_void,t_shell=7.0,
-        use_damage_model=damage,γ_damage=4.0,E_threshold=0.0)
     control = Control(use_filter=true,R_filter=(8.0,8.0,8.0),β=4.0,use_ssp=false,
                       foundry_projection_mode=:current)
     OptimizationProblem(pde,obj,sim,UmfpackSolver();foundry_mode=true,control)
