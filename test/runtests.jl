@@ -34,6 +34,10 @@ using Test
         include("mesh_repair_tests.jl")
     end
 
+    @testset "Material Table Tests" begin
+        include("material_tables_tests.jl")
+    end
+
     @testset "Logger Tests" begin
         include("logger_tests.jl")
     end
