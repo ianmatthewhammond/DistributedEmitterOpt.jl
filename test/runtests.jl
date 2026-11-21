@@ -58,7 +58,8 @@ using Test
     for (name, file) in (("Optimizer Safety Tests", "plain_optimizer_safety_tests.jl"),
                          ("Checkpoint Tolerance Tests", "raw_tolerance_checkpoint_tests.jl"),
                          ("Checkpoint State Tests", "checkpoint_state_tests.jl"),
-                         ("Mixed Output Gradient Tests", "mixed_output_gradient_tests.jl"))
+                         ("Mixed Output Gradient Tests", "mixed_output_gradient_tests.jl"),
+                         ("Export Fields Tests", "export_fields_tests.jl"))
         @testset "$name" begin
             sandbox = Module(gensym(:Tests))
             Core.eval(sandbox, :(include(path) = Base.include($sandbox, path)))

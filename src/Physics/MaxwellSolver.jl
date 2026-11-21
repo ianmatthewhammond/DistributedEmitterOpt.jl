@@ -140,31 +140,46 @@ Caches LU factorizations in the pool.
 """
 function solve_forward!(pde::MaxwellProblem, pt, sim, pool)
     fields = Dict{CacheKey,CellField}()
-    sim_base = default_sim(sim)
 
     for fc in all_configs(pde)
-        key = cache_key(fc)
-        sim_fc = sim_for(sim, fc)
-        pool_fc = pool_for(pool, fc)
-        cache = get_cache!(pool_fc, fc)
-
-        phys = build_phys_params(fc, pde.env, sim_fc; α=pde.α_loss)
-
-        # Always update the Maxwell factorization for current pt.
-        # `maxwell_lu!` performs in-place refactorization when a cached factor exists.
-        pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
-        A = assemble_maxwell(pt_fc, sim_fc, phys)
-        maxwell_lu!(cache, A)
-
-        source_y = (fc.polarization == :y)
-        b = assemble_source(sim_fc, phys; source_y)
-
-        E_vec = maxwell_solve!(cache, b)
-        E = FEFunction(sim_fc.U, E_vec)
-        fields[key] = E
+        cache = get_cache!(pool_for(pool, fc), fc)
+        fields[cache_key(fc)] = solve_forward_config!(pde, fc, pt, sim, cache)
     end
 
     return fields
+end
+
+"""
+    solve_forward_config!(pde, fc, pt, sim, cache::SolverCache; phys, copy_field=false) -> CellField
+
+Forward Maxwell solve for the single field configuration `fc` at physical density `pt`
+(defined on the base simulation). Always reassembles and refactorizes for `pt` and
+stores the factor in `cache`. `solve_forward!` passes the pool's cache for `fc`, where
+the adjoint solve reuses it; an export passes a cache of its own (see
+`Analysis.design_and_fields`).
+
+`phys` defaults to `build_phys_params(fc, pde.env, sim_for(sim, fc); α=pde.α_loss)`; a
+caller that has already built it passes it. With `copy_field=true` the returned field is
+built on a copy of the solve's result, so it stays valid after the factor in `cache` is
+released; by default it is built on the vector the solver returned, as before.
+"""
+function solve_forward_config!(pde::MaxwellProblem, fc::FieldConfig, pt, sim, cache::SolverCache;
+    phys=build_phys_params(fc, pde.env, sim_for(sim, fc); α=pde.α_loss), copy_field::Bool=false)
+    sim_base = default_sim(sim)
+    sim_fc = sim_for(sim, fc)
+
+    # Always update the Maxwell factorization for current pt.
+    # `maxwell_lu!` performs in-place refactorization when a cached factor exists.
+    pt_fc = sim_fc === sim_base ? pt : map_pt(pt, sim_fc)
+    A = assemble_maxwell(pt_fc, sim_fc, phys)
+    maxwell_lu!(cache, A)
+
+    source_y = (fc.polarization == :y)
+    b = assemble_source(sim_fc, phys; source_y)
+
+    E_vec = maxwell_solve!(cache, b)
+    copy_field && (E_vec = copy(E_vec))
+    return FEFunction(sim_fc.U, E_vec)
 end
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,33 @@ Pardiso, UMFPACK, etc.
 - `lu!(cache, A)` — Factorize matrix A
 - `solve!(cache, b)` — Solve Ax = b (forward)
 - `solve_adjoint!(cache, b)` — Solve A'x = b (adjoint)
+
+## Solution storage
+- `returns_owned_solutions(solver)` — `true` (the default) declares that creating,
+  refactorizing, solving with and releasing a different logical factor, including when any
+  of these throws, leave a vector returned earlier by `solve!` or `solve_adjoint!` unchanged
+  (its length and values) and leave the caller's own factors usable. Reusing the same Julia
+  handle does not make a new factorization the same logical factor. A forward, adjoint or
+  filter solve that overwrites its own factor's buffer is compatible with `true`: an export
+  copies each result before it releases that factor. A backend whose own later solve on the
+  same factor, or that factor's release, rewrites a vector the caller still holds is not
+  covered by the declaration and is outside the export's guarantee (issue #41). A backend
+  that reuses storage across factors must define it `false`: for example one solution
+  vector kept on the solver object, a filter solve that writes into storage a Maxwell solve
+  returned, or a new factor that trims or reuses the idle buffer of another factor. A pool
+  that recycles storage after release must declare `false` if a new logical factor can
+  change a still-retained vector. A method of `returns_owned_solutions` is a capability
+  query: it must have no side effects (no logging, printing, lazy initialization or filling
+  of a material or capability cache) and must give the same answer for the whole of an
+  operation that relies on it. An export queries it at entry.
+
+UMFPACK, Pardiso, MUMPS and cuDSS satisfy the default as written: every solve returns a
+newly allocated vector (UMFPACK's `\\`, Pardiso's and MUMPS's `similar(b)`, and cuDSS's
+copy of the device result into a new host `Array`), and making or releasing a factor does
+not write a vector an earlier solve returned.
+
+`Analysis.design_and_fields` and `Analysis.visualize_results` refuse a solver checked at entry that declares
+`false` (see their docstrings).
 """
 abstract type AbstractSolver end
 
@@ -16,6 +43,7 @@ abstract type AbstractSolver end
 lu!(solver::AbstractSolver, factor, A) = lu!(solver, A)
 filter_lu!(solver::AbstractSolver, factor, A) = filter_lu!(solver, A)
 release_factor!(::AbstractSolver, factor) = nothing
+returns_owned_solutions(::AbstractSolver) = true   # see "Solution storage" above
 
 """
     SolverCache{S<:AbstractSolver}

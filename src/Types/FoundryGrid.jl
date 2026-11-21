@@ -316,24 +316,41 @@ end
     build_foundry_pf(pf_vec, sim, control)
 
 Construct the foundry-mode filtered field on `sim.Pf` according to the selected
-projection mapping mode.
+projection mapping mode. Writes `pf_vec` into the shared grid values `sim.grid.params`
+first (the optimization path); `foundry_pf_local` builds the same field without that write.
 """
 function build_foundry_pf(pf_vec::Vector{Float64}, sim, control)
     nx, ny = length(sim.grid.x), length(sim.grid.y)
     sim.grid.params[:, :] .= reshape(pf_vec, (nx, ny))
+    return interpolate_foundry_pf(sim.grid.params, sim, control)
+end
 
+"""
+    foundry_pf_local(pf_vec, sim, control)
+
+The field `build_foundry_pf` returns for `pf_vec`, interpolated from a copy of `pf_vec`
+reshaped to the grid; `sim.grid` (its `params` included) is not written.
+"""
+function foundry_pf_local(pf_vec::Vector{Float64}, sim, control)
+    nx, ny = length(sim.grid.x), length(sim.grid.y)
+    return interpolate_foundry_pf(reshape(copy(pf_vec), (nx, ny)), sim, control)
+end
+
+"Interpolate the grid values `params` (nx × ny) onto the mesh; reads `sim.grid` geometry only."
+function interpolate_foundry_pf(params::Matrix{Float64}, sim, control)
     if control.foundry_projection_mode == :legacy
         # Capture an evaluation-local SNAPSHOT of the grid values, never `sim.grid` itself.
         # A closure over the mutable `sim` would (a) read the *next* evaluation's params after the
-        # in-place write above (aliasing), and (b) compare `===`-equal to the closure of every other
-        # evaluation, so any consumer keyed on identity (e.g. a cache) could not tell designs apart.
+        # in-place write in `build_foundry_pf` (aliasing), and (b) compare `===`-equal to the closure of
+        # every other evaluation, so any consumer keyed on identity (e.g. a cache) could not tell designs apart.
         # A value-keyed cache must observe the field belonging to each evaluation.
-        params = copy(sim.grid.params)
+        snapshot = copy(params)
         gridx, gridy = sim.grid.x, sim.grid.y
         bounds = sim.grid.reflection_bounds
-        return (r -> pf_grid(design_point(r, bounds), params, gridx, gridy))
+        return (r -> pf_grid(design_point(r, bounds), snapshot, gridx, gridy))
     elseif control.foundry_projection_mode == :current
-        pf_vals = [pf_grid(design_point(node, sim.grid), sim.grid) for node in sim.grid.nodes]
+        xs, ys = sim.grid.x, sim.grid.y
+        pf_vals = [pf_grid(design_point(node, sim.grid), params, xs, ys) for node in sim.grid.nodes]
         return FEFunction(sim.Pf, pf_vals)
     else
         error("Unsupported foundry_projection_mode=$(control.foundry_projection_mode). Use :current or :legacy.")
