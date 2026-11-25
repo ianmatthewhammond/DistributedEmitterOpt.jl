@@ -138,7 +138,7 @@ function build_test_problem(;
 
     # The objective is built first (it validates its settings), so a refusal leaves no mesh file behind.
     meshfile = tempname() * ".msh"
-    genmesh(geo, meshfile; per_x=false, per_y=false)
+    genmesh(geo, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
     # IO Configuration
     inputs = [FieldConfig(λ_pump; θ=θ, pol=:y)] # Pump Y (consistent with symmetry)

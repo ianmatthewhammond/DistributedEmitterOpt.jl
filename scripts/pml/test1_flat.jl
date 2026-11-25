@@ -47,13 +47,13 @@ for c in cases
     end
 
     mesh_abc = joinpath(outdir, "flat_$(c.hd)_abc.msh")
-    genmesh(geo_for(c; dpml=400.0), mesh_abc; pml=false)
+    genmesh(geo_for(c; dpml=400.0), mesh_abc; pml=false, mirror_curves=true)
     E, sim, _ = solve_case(mesh_abc, ABC(); λ, nf, nm=c.nm, ns, pfun=x -> 1.0)
     record!("ABC (no PML)", E)
 
     for dpml in (200.0, 400.0)
         mesh_pml = joinpath(outdir, "flat_$(c.hd)_pml$(Int(dpml)).msh")
-        genmesh(geo_for(c; dpml), mesh_pml; pml=true)
+        genmesh(geo_for(c; dpml), mesh_pml; pml=true, mirror_curves=true)
         for R in (1e-4, 1e-8)
             E, sim, phys = solve_case(mesh_pml, NewPML(ZPML(R=R, m=3.0)); λ, nf, nm=c.nm, ns, pfun=x -> 1.0)
             record!("new PML d=$(Int(dpml)) R=$(R)", E)

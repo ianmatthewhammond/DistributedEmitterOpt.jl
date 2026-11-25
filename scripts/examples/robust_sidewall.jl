@@ -11,7 +11,7 @@ geo.l1 = 50.0; geo.l2 = 30.0; geo.l3 = 50.0
 geo.hair = 200.0; geo.hs = 120.0; geo.ht = 80.0
 out = mktempdir(cleanup=false)
 meshfile = joinpath(out, "example.msh")
-genmesh(geo, meshfile; per_x=false, per_y=false)
+genmesh(geo, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
 pde = MaxwellProblem(
     env=Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33),

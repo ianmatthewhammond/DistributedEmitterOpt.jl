@@ -77,7 +77,7 @@ dimensions are never changed. The geometry actually used is returned.
 function mesh_and_solve(geo, meshfile, withpml, bc; kw...)
     g = deepcopy(geo)
     for retry in 0:4
-        genmesh(g, meshfile; pml=withpml)
+        genmesh(g, meshfile; pml=withpml, mirror_curves=true)
         try
             E, sim, phys = solve_case(meshfile, bc; kw...)
             return E, sim, phys, g, retry

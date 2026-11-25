@@ -10,7 +10,7 @@ const DEO = DistributedEmitterOpt
     geo.hair = 160; geo.hs = 100; geo.ht = 40
     geo.l1 = 15.0; geo.l2 = 15.0; geo.l3 = 15.0
     mesh = joinpath(mktempdir(), "normal.msh")
-    genmesh(geo, mesh)
+    genmesh(geo, mesh; mirror_curves=true)
     env = Environment(mat_design="Ag", mat_substrate=1.45, mat_fluid=1.0)
     ẑ = VectorValue(0.0, 0.0, 1.0)
     for pol in (:x, :y)

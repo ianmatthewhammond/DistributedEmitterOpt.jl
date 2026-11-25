@@ -23,7 +23,7 @@ geo.ht = 80.0
 
 outdir = mktempdir()
 meshfile = joinpath(outdir, "mesh.msh")
-genmesh(geo, meshfile; per_x=false, per_y=false)
+genmesh(geo, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
 # ## 2. Physics (inelastic with two outputs, mixed polarization)
 env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)

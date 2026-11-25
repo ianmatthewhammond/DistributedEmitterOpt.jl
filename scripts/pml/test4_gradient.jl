@@ -31,7 +31,7 @@ function build(; pml::Bool)
     geo.hair = 200.0; geo.hs = 120.0; geo.ht = 80.0
     geo.dpml = 150.0
     meshfile = tempname() * ".msh"
-    genmesh(geo, meshfile; pml)
+    genmesh(geo, meshfile; pml, mirror_curves=true)
     env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33,
         pml=pml ? ZPML(R=1e-8, m=3.0) : nothing)
     objective = SERSObjective(αₚ=Matrix{ComplexF64}(I, 3, 3), volume=true, surface=false,

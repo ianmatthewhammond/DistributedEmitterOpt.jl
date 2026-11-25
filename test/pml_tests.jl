@@ -53,8 +53,8 @@ end
         dpml=300.0, l1=40.0, l2=20.0, l3=40.0)
     st = stack_z(geo)
     mesh_pml, mesh_abc = tempname() * ".msh", tempname() * ".msh"
-    genmesh(geo, mesh_pml; pml=true)
-    genmesh(geo, mesh_abc; pml=false)
+    genmesh(geo, mesh_pml; pml=true, mirror_curves=true)
+    genmesh(geo, mesh_abc; pml=false, mirror_curves=true)
 
     E, sim, phys = solve_case(mesh_pml, NewPML(ZPML(R=1e-8)); λ, nf, nm, ns, pfun=x -> 1.0)
     z_bot, d_bot, z_top, d_top = getpmlz(sim.labels, sim.Ω)

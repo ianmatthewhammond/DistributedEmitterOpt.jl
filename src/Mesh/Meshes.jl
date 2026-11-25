@@ -278,11 +278,11 @@ outer faces of the layers. Use with `Environment(pml=ZPML(...))`.
 `center_xy` moves the cell centre in x and y (`build_angular_simulation` puts a
 doubled periodic axis beside the independent patch). `structured_xy=(nx, ny)`
 meshes every box as structured hexahedra with `nx`/`ny` intervals across x/y.
-A structured mesh, or `mirror_curves=true` on an unstructured one, also tags
-the CAD curves and points that lie on the mirror walls as `FacesX`/`FacesY`,
-so an essential (PEC) wall constrains every tangential degree of freedom on
-it; the surface-only groups leave the edges along the box interfaces and the
-wall corners free. The defaults reproduce the legacy meshes exactly.
+Structured meshes and unstructured meshes generated with `mirror_curves=true`
+include the wall curves and points in `FacesX`/`FacesY`. The defaults
+reproduce the legacy meshes exactly.
+
+Pass `mirror_curves=true` whenever an axis is not periodic.
 """
 function genmesh(geo::SymmetricGeometry, meshfile::String; per_x::Bool=false, per_y::Bool=false,
                  pml::Bool=false, structured_xy::Union{Nothing,Tuple{Int,Int}}=nothing,

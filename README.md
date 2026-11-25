@@ -16,10 +16,10 @@ Pkg.add(url="https://github.com/ianmatthewhammond/DistributedEmitterOpt.jl")
 ```julia
 using DistributedEmitterOpt
 
-# Define geometry and generate mesh
+# Define geometry and generate mesh (mirror walls tagged on their curves too)
 geo = SymmetricGeometry(532.0; L=200.0, W=200.0)
 meshfile = "design.msh"
-genmesh(geo, meshfile; per_x=false, per_y=false)
+genmesh(geo, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
 # Configure physics
 env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
@@ -40,6 +40,12 @@ prob = OptimizationProblem(pde, SERSObjective(), meshfile, UmfpackSolver();
 init_uniform!(prob, 0.5)
 g_opt, p_opt = optimize!(prob; max_iter=100)
 ```
+
+Non-periodic walls are PEC mirrors for one polarization, so every edge of such a wall (and,
+from `order=1`, every face) must carry one of the field space's Dirichlet tags. For an
+unstructured `genmesh` mesh, as above, that takes `mirror_curves=true`; plain `genmesh` tags
+the walls on their surfaces only. This leaves some tangential degrees of freedom on the PEC wall curves free. Nothing
+checks this for a mesh you build or import yourself; see [mirror wall tags](docs/mirror_walls.md).
 
 ## Features
 

@@ -21,7 +21,7 @@ function build_logger_problem(root::String)
     g.ht = 20.0
 
     meshfile = joinpath(root, "logger_test_mesh.msh")
-    genmesh(g, meshfile; per_x=false, per_y=false)
+    genmesh(g, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
     cfg = RunLogConfig(
         enabled=true,

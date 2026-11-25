@@ -13,10 +13,10 @@ Supports 2D foundry-mode DOFs (grid interpolated onto the mesh) and full 3D mesh
 ```julia
 using DistributedEmitterOpt
 
-# 1. Define geometry and generate mesh
+# 1. Define geometry and generate mesh (mirror walls tagged on their curves too)
 geo = SymmetricGeometry(532.0; L=200.0, W=200.0)
 meshfile = "design.msh"
-genmesh(geo, meshfile; per_x=false, per_y=false)
+genmesh(geo, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
 # 2. Configure physics
 env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
@@ -37,6 +37,12 @@ prob = OptimizationProblem(pde, SERSObjective(), meshfile, UmfpackSolver();
 init_uniform!(prob, 0.5)
 g_opt, p_opt = optimize!(prob; max_iter=100)
 ```
+
+A non-periodic wall is a PEC mirror for one polarization, and the PEC condition must hold on
+every edge of the wall, including the curves where it meets the other wall and the layer
+interfaces. `mirror_curves=true` tags those curves; plain `genmesh` does not.
+This leaves some tangential degrees of freedom on the PEC wall curves free. `build_simulation` does not check a mesh it is given for this (see
+[mirror wall tags](https://github.com/ianmatthewhammond/DistributedEmitterOpt.jl/blob/main/docs/mirror_walls.md)).
 
 ## Key concepts
 

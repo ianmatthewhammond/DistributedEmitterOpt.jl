@@ -18,7 +18,7 @@ for h in (30.0, 15.0)
     zl = collect(range(st.z_min + 1, st.z_max - 1, length=400)); Eex = exact.(zl)
     line = [Point(7.3, -4.1, z) for z in zl]
     mesh = joinpath(outdir, "legacy_h$(Int(h)).msh")
-    genmesh(geo, mesh; pml=true)
+    genmesh(geo, mesh; pml=true, mirror_curves=true)
     err(E) = (Ey = [v[2] for v in eval_at(E, line)]; norm(Ey - Eex) / norm(Eex))
     for R in (1e-10, 1e-4, 1e-2)
         E, _, _ = solve_case(mesh, LegacyPML(R, true); λ, nf, nm, ns, pfun=x -> 1.0)
