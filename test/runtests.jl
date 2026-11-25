@@ -54,6 +54,10 @@ using Test
         include("helmholtz_radius_tests.jl")
     end
 
+    @testset "Spectral Sweep State Tests" begin
+        include("spectral_sweep_state_tests.jl")
+    end
+
     # Separate namespaces: these files define their own fixtures and constants.
     for (name, file) in (("Optimizer Safety Tests", "plain_optimizer_safety_tests.jl"),
                          ("Checkpoint Tolerance Tests", "raw_tolerance_checkpoint_tests.jl"),
