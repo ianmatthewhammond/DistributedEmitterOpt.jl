@@ -41,7 +41,8 @@ Environment(mat_design, mat_substrate, mat_fluid, bot_PEC::Bool, logger_cfg::Run
     resolve_index(mat::MaterialSpec, λ::Float64) → ComplexF64
 
 Get complex refractive index at wavelength λ (nm).
-- String: lookup from material database
+- String: for a material name, `resolve_index` uses `get_interp`, which loads the table on a
+  cache miss. `clear_material_cache!()` empties that cache.
 - Float64: use directly as real index
 """
 function resolve_index(mat::String, λ::Float64)::ComplexF64

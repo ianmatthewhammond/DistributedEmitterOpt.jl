@@ -17,6 +17,9 @@ import Interpolations
 Load refractive index data for a material and return interpolation functions.
 The interpolants are callable with wavelength in nm.
 
+`refindex` loads the requested table afresh and returns its interpolants. `resolve_index`
+uses a cached copy instead; see `clear_material_cache!` for refreshing it.
+
 ## Example
 ```julia
 n_Ag, k_Ag = refindex("Ag")
@@ -136,6 +139,9 @@ end
     complex_index(material::String, λ::Float64) -> ComplexF64
 
 Get complex refractive index n - ik at wavelength λ (nm) (the package convention for absorbing media).
+
+Calls `refindex`, which loads the requested table afresh, so it can differ from
+`resolve_index` for the same material after the file has changed; see `clear_material_cache!`.
 """
 function complex_index(material::String, λ::Float64)
     n_interp, k_interp = refindex(material)
@@ -149,7 +155,14 @@ end
 # Cache loaded interpolants
 const _MATERIAL_CACHE = Dict{String,Tuple{Any,Any}}()
 
-"""Get cached interpolant (loads once per session)."""
+"""
+    get_interp(material) -> (n_interp, k_interp)
+
+Interpolants for `material` from a module-level cache keyed by the material name. The first
+call for a name loads the table with `refindex` and stores the result; later calls return the
+stored interpolants without reading the file. A failed load leaves the name uncached, so the
+next call retries. See `clear_material_cache!` for refreshing.
+"""
 function get_interp(material::String)
     if !haskey(_MATERIAL_CACHE, material)
         _MATERIAL_CACHE[material] = refindex(material)
@@ -157,7 +170,19 @@ function get_interp(material::String)
     return _MATERIAL_CACHE[material]
 end
 
-"""Clear material cache."""
+"""
+    clear_material_cache!()
+
+Empty the named-material interpolant cache used by `get_interp` and `resolve_index`.
+
+Call `DistributedEmitterOpt.clear_material_cache!()` after editing a table. The next cache miss
+reloads it. Existing interpolants retain their values.
+
+Clearing does not recompute values already derived from a table. In particular, a tilted
+`FieldConfig` built by the convenience constructors stores the fluid index at its wavelength.
+For a Bloch configuration, `build_phys_params` throws `ArgumentError` if the fluid index's real
+part differs from `n_incident` by more than `1e-12` or its imaginary magnitude exceeds `1e-12`.
+"""
 clear_material_cache!() = empty!(_MATERIAL_CACHE)
 
 # ═══════════════════════════════════════════════════════════════════════════════
