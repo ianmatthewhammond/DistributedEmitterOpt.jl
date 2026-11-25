@@ -43,7 +43,7 @@ objective = SERSObjective(
     E_threshold=10000.0
 )
 
-# Control: Helmholtz filter (use_dct=false), SSP projection + constraints
+# Control: Helmholtz PDE filter (3D; use_dct is ignored), SSP projection + constraints
 control = Control(
     use_filter=true,
     R_filter=(20.0, 20.0, 20.0),
