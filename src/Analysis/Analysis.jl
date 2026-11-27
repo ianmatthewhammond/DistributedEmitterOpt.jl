@@ -25,6 +25,7 @@ sumabs(a::CellField) = Operation(sumabs)(a)
 
 The sweep evaluates `p_opt` at each wavelength on `prob`. On return, normal or by an error, `prob.g` and
 `prob.∇g` hold the values they had before the call.
+At zero points, only single-pool sweeps previously returned empty results.
 
 Sweep wavelength around a center value, re-evaluating the objective.
 Does not perform optimization, only analysis.
