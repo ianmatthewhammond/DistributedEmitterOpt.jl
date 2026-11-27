@@ -38,6 +38,67 @@ function objective_and_gradient!(∇g::Vector{Float64}, p::Vector{Float64},
 end
 
 # ---------------------------------------------------------------------------
+# Physical density
+# ---------------------------------------------------------------------------
+
+"""
+    physical_density(p, prob; filter_cache) -> (; pf_vec, pf, pt)
+
+Map the design vector `p` to the physical density used by the forward solve,
+exactly as the objective and gradient do:
+
+- foundry mode, `:current`: grid filter, interpolation onto `Pf`, FEM SSP;
+- foundry mode, `:legacy`: grid filter, grid SSP, interpolation of the projected grid;
+- 3D mode: Helmholtz filter into `Pf`, FEM SSP.
+
+`pf_vec` is the filtered vector (2D grid values in foundry mode, element values in unfiltered 3D, `Pf` DOFs in filtered 3D),
+`pf` the filtered field on the mesh (`nothing` in the legacy foundry mode, which has
+no filtered mesh field) and `pt` the projected physical density on the mesh.
+
+`filter_cache` holds the 3D Helmholtz filter factor (unused in foundry mode). The
+objective and gradient use the problem's own cache, the default; an export passes a
+cache of its own so that it leaves the problem's cache as it found it.
+
+`write_grid` (foundry mode): with `true`, the default used by the objective and gradient,
+the values to interpolate are written (projected values in legacy mode) into the shared `sim.grid.params` before they are
+interpolated (`build_foundry_pf`); with `false`, as in an export, they are interpolated
+from a copy and `sim.grid` is not written (`foundry_pf_local`). Both give the same field.
+
+`copy_filtered` (3D mode): with `true`, as in an export, the filter solve's result is copied
+before `pf` and `pt` are built on it, so they stay valid after the filter factor is released,
+whatever the backend does with its solution storage then. The default `false` keeps the
+solver's vector, as the objective and gradient always have.
+"""
+function physical_density(p::Vector{Float64}, prob::OptimizationProblem;
+    filter_cache::SolverCache=default_pool(prob.pool).filter_cache, write_grid::Bool=true,
+    copy_filtered::Bool=false)
+    (; sim, control) = prob
+    sim0 = default_sim(sim)
+    if prob.foundry_mode
+        # Filter on grid
+        pf_vec = filter_grid(p, sim0, control)
+        to_mesh = write_grid ? build_foundry_pf : foundry_pf_local
+        if control.foundry_projection_mode == :legacy
+            # Legacy foundry flow: apply SSP on 2D grid first, then interpolate pt to FEM.
+            pt_vec = smoothed_projection_vec(pf_vec, control, sim0)
+            pt = to_mesh(pt_vec, sim0, control)
+            return (; pf_vec, pf=nothing, pt)
+        end
+        # Current flow: interpolate pf to FEM first, then apply FEM SSP.
+        pf = to_mesh(pf_vec, sim0, control)
+        pt = project_ssp(pf, control, sim0.Ω)
+        return (; pf_vec, pf, pt)
+    end
+    # Helmholtz PDE filter
+    pf_vec = filter_helmholtz!(p, filter_cache, sim0, control)
+    copy_filtered && (pf_vec = copy(pf_vec))
+    pf = FEFunction(sim0.Pf, pf_vec)
+    # SSP projection
+    pt = project_ssp(pf, control, sim0.Ω)
+    return (; pf_vec, pf, pt)
+end
+
+# ---------------------------------------------------------------------------
 # 2D DOF (foundry) gradient
 # ---------------------------------------------------------------------------
 
@@ -51,20 +112,10 @@ function compute_gradient_2d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     (; pde, objective, sim, pool, control) = prob
     sim0 = default_sim(sim)
 
-    # Filter on grid
-    pf_vec = filter_grid(p, sim0, control)
+    # Filter on grid, then project (see `physical_density`)
+    (; pf_vec, pf, pt) = physical_density(p, prob)
 
-    local pt
     local ∂g_∂pf_vec
-    if control.foundry_projection_mode == :legacy
-        # Legacy foundry flow: apply SSP on 2D grid first, then interpolate pt to FEM.
-        pt_vec = smoothed_projection_vec(pf_vec, control, sim0)
-        pt = build_foundry_pf(pt_vec, sim0, control)
-    else
-        # Current flow: interpolate pf to FEM first, then apply FEM SSP.
-        pf = build_foundry_pf(pf_vec, sim0, control)
-        pt = project_ssp(pf, control, sim0.Ω)
-    end
 
     # Forward Maxwell solves
     fields = solve_forward!(pde, pt, sim, pool)
@@ -138,12 +189,8 @@ function compute_gradient_3d_opt!(∇g::Vector{Float64}, p::Vector{Float64},
     (; pde, objective, sim, pool, control) = prob
     sim0 = default_sim(sim)
 
-    # Helmholtz PDE filter
-    pf_vec = filter_helmholtz!(p, default_pool(pool).filter_cache, sim0, control)
-    pf = FEFunction(sim0.Pf, pf_vec)
-
-    # SSP projection
-    pt = project_ssp(pf, control, sim0.Ω)
+    # Helmholtz PDE filter, then SSP projection (see `physical_density`)
+    (; pf, pt) = physical_density(p, prob)
 
     # Forward Maxwell solves
     fields = solve_forward!(pde, pt, sim, pool)

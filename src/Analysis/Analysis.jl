@@ -3,12 +3,12 @@ module Analysis
 using JLD2
 using Printf
 using CairoMakie
-import ..DistributedEmitterOpt: OptimizationProblem, FieldConfig, MaxwellProblem, evaluate, default_sim, sim_for, pool_for, get_cache!, build_phys_params, map_pt, assemble_maxwell, maxwell_lu!, assemble_source, maxwell_solve!, has_maxwell_factor, glc_solid, filter_grid, project_grid, pf_grid, project_ssp, build_foundry_pf, smoothed_projection_vec, require_dct_filter_problem
+import ..DistributedEmitterOpt: OptimizationProblem, FieldConfig, MaxwellProblem, evaluate, default_sim, sim_for, pool_for, get_cache!, build_phys_params, map_pt, assemble_maxwell, maxwell_lu!, assemble_source, maxwell_solve!, has_maxwell_factor, glc_solid, filter_grid, project_grid, pf_grid, project_ssp, build_foundry_pf, smoothed_projection_vec, physical_density, solve_forward_config!, default_pool, SolverCache, release_factor!, clear_filter_factor!, returns_owned_solutions, require_dct_filter_problem, validate_field_boundaries
 using Gridap
 using LinearAlgebra
 using Statistics
 
-export spectral_sweep, fabrication_sweep, visualize_results, plot_iteration_history, save_design_2d_image
+export spectral_sweep, fabrication_sweep, visualize_results, design_and_fields, plot_iteration_history, save_design_2d_image
 
 sumabs4_uh2(uh²) = uh² * uh²
 sumabs4(uh::VectorValue) = sumabs2(uh)^2
@@ -193,94 +193,210 @@ function fabrication_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
 end
 
 """
+    design_and_fields(prob, p_opt; config=prob.pde.inputs[1]) -> (; pf_vec, pf, pt, config, E)
+
+Physical density and forward field for the design `p_opt`: `physical_density` (filter, then
+projection), then a forward solve that assembles and factorizes Maxwell for this design
+(`solve_forward_config!`). `pf_vec` is the filtered vector, `pf` the filtered field on the
+mesh (`nothing` in the legacy foundry projection mode), `pt` the physical density on the mesh
+and `E` the field of `config`.
+
+The call reads the Maxwell solver of `config`'s pool and the default pool's solver once, at
+entry, and uses only those objects. It refuses:
+- with `ArgumentError`, a Maxwell solver, or (3D with `use_filter` on) a filter solver, that
+  declares `returns_owned_solutions` `false` (see `AbstractSolver`);
+- with `ArgumentError`, a foundry problem whose control has `use_filter` on and `use_dct=false`
+  (`require_dct_filter_problem`);
+- with `DimensionMismatch`, a design of the wrong length;
+- the control and `config` flag combinations of `check_export_config` (projection mode,
+  legacy sidewalls, mirror walls, Bloch with PML).
+Filter solver errors can occur while building the density. Maxwell assembly and solver errors
+occur afterwards.
+
+The filter and Maxwell factors are made in solver caches owned by the call and handed to
+`release_factor!`; each solver result is copied before its factor is released. The call does
+not use or fill the caches of `prob`'s pools and, in foundry mode, does not write
+`sim.grid.params`. For solution vectors a caller holds from earlier solves, see
+`AbstractSolver` and issue #41. Concurrent use of one `prob` is not supported (#58).
+"""
+function design_and_fields(prob::OptimizationProblem, p_opt::Vector{Float64};
+    config::FieldConfig=prob.pde.inputs[1])
+    # The solver objects this call uses are read once, here; the checks and the call's own
+    # caches use these objects, whatever the pools hold later.
+    solvers = export_solvers(prob, config)
+    # Checks that read only their arguments come first: the backend declaration, the foundry
+    # filter setting, the design length, then the control and configuration flags.
+    check_export_backend(prob, solvers, "design_and_fields")
+    require_dct_filter_problem(prob, "design_and_fields"; use_constraints=false)
+    check_export_design_length(prob, p_opt, "design_and_fields")
+    check_export_config(prob, config)
+    return export_design_and_fields(prob, p_opt, config, solvers)
+end
+
+"""
+The work of `design_and_fields` after its checks, on the solver objects `solvers` (from
+`export_solvers`) read by the caller at entry.
+"""
+function export_design_and_fields(prob::OptimizationProblem, p_opt::Vector{Float64}, config::FieldConfig, solvers)
+    # Can load a material table into the material cache and log; refused before any density.
+    phys = build_phys_params(config, prob.pde.env, sim_for(prob.sim, config); α=prob.pde.α_loss)
+
+    (; pf_vec, pf, pt) = export_density_with(p_opt, prob, solvers.filter)
+    maxwell_cache = analysis_cache(solvers.maxwell)
+    try
+        # The field is copied out of the solver's storage before its factor is released.
+        E = solve_forward_config!(prob.pde, config, pt, prob.sim, maxwell_cache; phys, copy_field=true)
+        return (; pf_vec, pf, pt, config, E)
+    finally
+        release_analysis_cache!(maxwell_cache)
+    end
+end
+
+"""
+The solver objects (and MPI head flags) an export of `config` uses, read once from the
+problem's pools: `maxwell` from `config`'s pool, `filter` from the default pool. An export
+builds its own caches on these objects, so a pool or solver replaced during
+the call (for example by a logger reacting to a warning) is not used by it.
+"""
+export_solvers(prob::OptimizationProblem, config::FieldConfig) =
+    (; maxwell=solver_of(pool_for(prob.pool, config)), filter=solver_of(default_pool(prob.pool)))
+
+solver_of(pool) = (; solver=pool.solver, am_head=pool.am_head)
+
+"""
+Check the backend declarations required by the settings at entry.
+"""
+function check_export_backend(prob::OptimizationProblem, solvers, caller::String)
+    needs_filter_solve(prob) && check_owned_solutions(solvers.filter.solver, caller)
+    check_owned_solutions(solvers.maxwell.solver, caller)
+    return nothing
+end
+
+"""
+Check foundry projection mode and legacy sidewalls, mirror compatibility, and Bloch compatibility with PML. They are
+the refusals the density and the operator would raise later, with the same messages: in
+foundry mode an unsupported `foundry_projection_mode` (`ErrorException`), and
+`foundry_projection_mode=:legacy` with `use_sidewall` (`ArgumentError`); for every mode the
+mirror and polarization checks of `validate_field_boundaries` and, for the Bloch
+formulation, an environment with the ±z PML (`ArgumentError`).
+"""
+function check_export_config(prob::OptimizationProblem, config::FieldConfig)
+    control = prob.control
+    if prob.foundry_mode
+        mode = control.foundry_projection_mode
+        mode in (:current, :legacy) ||
+            error("Unsupported foundry_projection_mode=$(mode). Use :current or :legacy.")
+        mode == :legacy && control.use_sidewall && throw(ArgumentError(
+            "sidewalls need foundry_projection_mode=:current; :legacy projects on the 2D grid, " *
+            "which has no sidewall model"))
+    end
+    validate_field_boundaries(sim_for(prob.sim, config), config)
+    config.formulation == :bloch && !isnothing(prob.pde.env.pml) && throw(ArgumentError(
+        "assemble_maxwell: the ±z PML is not implemented for the Bloch (general-angle) formulation; use " *
+        "Environment(pml=nothing) with tilted or explicitly-tilted FieldConfigs"))
+    return nothing
+end
+
+"True when the physical density of `prob` needs a 3D Helmholtz filter solve (3D mode with the filter on)."
+needs_filter_solve(prob::OptimizationProblem) = !prob.foundry_mode && prob.control.use_filter
+
+function check_owned_solutions(solver, caller::String)
+    returns_owned_solutions(solver) || throw(ArgumentError(
+        "$caller: the solver backend $(typeof(solver)) declares `returns_owned_solutions` false; an export " *
+        "needs a backend that creates, refactorizes, solves with and releases a factor without writing a " *
+        "vector another factor's solve returned (see `AbstractSolver`). Nothing was solved, factorized or written."))
+    return nothing
+end
+
+"Refuse a design vector whose length differs from the problem's design (it reads only its arguments)."
+function check_export_design_length(prob::OptimizationProblem, p_opt::Vector{Float64}, caller::String)
+    length(p_opt) == length(prob.p) || throw(DimensionMismatch(
+        "$caller: the design vector has $(length(p_opt)) entries; this problem's design has $(length(prob.p))"))
+    return nothing
+end
+
+"""
+The physical density of `p` for an export: the 3D filter is factorized in a cache owned
+by this call and released before it returns or throws, the filtered vector is copied out
+of the solver's storage before that release, and the foundry grid is not written. `physical_density`, which the objective uses, does not
+check the declaration.
+"""
+function export_density(p::Vector{Float64}, prob::OptimizationProblem)
+    filter = solver_of(default_pool(prob.pool))
+    needs_filter_solve(prob) && check_owned_solutions(filter.solver, "export_density")
+    require_dct_filter_problem(prob, "export_density"; use_constraints=false)
+    check_export_design_length(prob, p, "export_density")
+    return export_density_with(p, prob, filter)
+end
+
+"The work of `export_density` after its checks, on the filter solver `filter` (from `solver_of`)."
+function export_density_with(p::Vector{Float64}, prob::OptimizationProblem, filter)
+    filter_cache = analysis_cache(filter)
+    try
+        return physical_density(p, prob; filter_cache, write_grid=false, copy_filtered=true)
+    finally
+        release_analysis_cache!(filter_cache)
+    end
+end
+
+"An empty solver cache on a captured solver (`solver_of`), owned by one export."
+analysis_cache(s) = SolverCache(s.solver; am_head=s.am_head)
+
+"""
+Release every factor held by an export's own solver cache. The filter factor goes through
+`clear_filter_factor!`, which detaches the factor and its operator key before the release,
+so the cache holds neither afterwards, also when the release throws.
+"""
+function release_analysis_cache!(cache::SolverCache)
+    clear_filter_factor!(cache)
+    for name in (:A_factor, :E2_factor)
+        factor = getfield(cache, name)
+        isnothing(factor) && continue
+        setfield!(cache, name, nothing)
+        release_factor!(cache.solver, factor)
+    end
+    return nothing
+end
+
+"""
     visualize_results(prob, p_opt; root)
 
-Generate VTK and PNG outputs for the final design.
+Write the physical density and first input’s field for `p_opt` to `design.vtu` and `fields.vtu` on the same path
+as `design_and_fields`. Foundry mode also writes `design_2d.png`.
 
-A foundry problem whose control has `use_dct=false` and `use_filter` on is refused with an `ArgumentError` before
-anything is printed or written.
+It refuses what `design_and_fields` refuses for the first input configuration.
 """
 function visualize_results(prob::OptimizationProblem, p_opt::Vector{Float64}; root::String=prob.root)
-    # Before the announcement below and before any file is written.
+    # Before the announcement below and before any file is written, in the order of
+    # `design_and_fields`, on solver objects read once here.
+    config = prob.pde.inputs[1]
+    solvers = export_solvers(prob, config)
+    check_export_backend(prob, solvers, "visualize_results")
     require_dct_filter_problem(prob, "visualize_results"; use_constraints=false)
+    check_export_design_length(prob, p_opt, "visualize_results")
+    check_export_config(prob, config)
     println("Generating visualization artifacts in $root...")
 
-    # 1. Get physical design pt on the mesh
-    # Valid for both visualization and solving
-    sim = prob.sim
-    sim0 = default_sim(sim)
+    sim0 = default_sim(prob.sim)
+    (; pf_vec, pt, E) = export_design_and_fields(prob, p_opt, config, solvers)
 
-    local pt
-    if prob.foundry_mode
-        # Filter on grid
-        pf_vec = filter_grid(p_opt, sim0, prob.control)
+    # 1. Write the physical density (a plain function of position in the legacy foundry mode)
+    pt_cf = pt isa Function ? CellField(pt, sim0.Ω_design) : pt
+    writevtk(sim0.Ω_design, joinpath(root, "design"), cellfields=["p" => pt_cf])
 
-        if prob.control.foundry_projection_mode == :legacy
-            # Legacy foundry flow: SSP on 2D grid, then interpolate projected grid.
-            pt_vec = smoothed_projection_vec(pf_vec, prob.control, sim0)
-            pt = build_foundry_pf(pt_vec, sim0, prob.control)
-        else
-            # Current flow: interpolate pf, then SSP on FEM.
-            pf = build_foundry_pf(pf_vec, sim0, prob.control)
-            pt = project_ssp(pf, prob.control, sim0.Ω)
-        end
-    else
-        # 3D mode (placeholder implementation)
-        pf_vec = p_opt # Assumes no filter for simplicity if not foundry
-        pf = FEFunction(sim0.Pf, pf_vec)
-        pt = project_ssp(pf, prob.control, sim0.Ω)
-    end
-
-    # Write optimized design
-    writevtk(sim0.Ω_design, joinpath(root, "design"), cellfields=["p" => pt])
-
-    # 2. Solve fields for the first input config (nominal)
-    config = prob.pde.inputs[1]
-    sim_fc = sim_for(sim, config)
-
-    # Get solver cache
-    pool_fc = pool_for(prob.pool, config)
-    cache = get_cache!(pool_fc, config)
-
-    # Assemble physics
-    # Correct signature: build_phys_params(fc::FieldConfig, env::Environment, sim; α=0.0)
-    phys = build_phys_params(config, prob.pde.env, sim_fc; α=prob.pde.α_loss)
-
-    # Manual forward solve for single config
-    # 1. Factorize (if needed)
-    if !has_maxwell_factor(cache)
-        # map_pt handles expanding p_phys if needed (usually identity for sim_base)
-        # Use pt directly (already on mesh)
-        # Note: map_pt is not needed if we use the mesh-defined pt, unless specific logic applies
-        # But solve_forward uses map_pt(pt, sim_fc).
-        # Since we just computed pt on sim0, we should pass it.
-        # If sim_fc != sim0, we might need re-mapping, but typically sim0 is the one with the mesh.
-
-        A = assemble_maxwell(pt, sim_for(sim, config), phys)
-        maxwell_lu!(cache, A)
-    end
-
-    # 2. Solve
-    source_y = (config.polarization == :y)
-    b = assemble_source(sim_for(sim, config), phys; source_y)
-
-    E_vec = maxwell_solve!(cache, b)
-    uh = FEFunction(sim_fc.U, E_vec)
-
-    # 3. Write fields
-    Ω = sim_fc.Ω
+    # 2. Write the fields of the first input configuration (nominal)
+    Ω = sim_for(prob.sim, config).Ω
 
     writevtk(Ω, joinpath(root, "fields"), cellfields=[
-        "E_real" => real(uh),
-        "E_imag" => imag(uh),
-        "E_sq" => sumabs2(uh)
+        "E_real" => real(E),
+        "E_imag" => imag(E),
+        "E_sq" => sumabs2(E)
     ])
 
     println("  Saved design.vtu and fields.vtu")
 
-    # 4. Save 2D copy if foundry mode
+    # 3. Save 2D copy if foundry mode (the filtered grid)
     if prob.foundry_mode
-        # pf_vec computed above
         save_design_2d_image(pf_vec, sim0.grid.x, sim0.grid.y; root=root)
     end
 end
