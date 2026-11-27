@@ -4,6 +4,21 @@
 Interface for sparse direct solvers. Concrete implementations wrap
 Pardiso, UMFPACK, etc.
 
+## Returned vectors
+The vector returned by `solve!` or `solve_adjoint!` belongs to the caller. A backend must
+return storage that it does not share with the right-hand side, the solver object, a factor
+or any earlier result, and must not write to it after returning: not in a later solve on
+this or another factor, a refactorization, or `release_factor!`.
+
+With the packaged backends, forward and adjoint fields wrap the returned vectors. Maxwell
+and eigen forward solves retain their result in `cache.x`. When filtering is enabled,
+`filter_helmholtz!` returns the solve vector directly. The shift-invert operator passes its
+result to KrylovKit. Reusing a result buffer can silently overwrite a retained field or
+filtered density and corrupt objectives and gradients subsequently computed from it.
+
+All four packaged backends return fresh storage for forward and adjoint solves. Later
+solves, refactorizations, factor release and pool clearing preserve earlier results.
+
 ## Required interface
 - `lu!(cache, A)` — Factorize matrix A
 - `solve!(cache, b)` — Solve Ax = b (forward)
