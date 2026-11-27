@@ -51,16 +51,84 @@ end
 # SSP derivatives for adjoint
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_tanhc(u) = iszero(u) ? one(u) : tanh(u) / u   # tanh(u)/u, with its limit 1 at u = 0
+
+# sech²(t)/D′ from a = 2|t| and D′, in two forms (see `∂projection_∂pf_stable`).
+# Direct: sech²(t) = 4e^{−a}/(1 + e^{−a})², relative error a few eps once a is given.
+_endpoint_slope_direct(a, den) = (q = exp(-a); 4 * q / (1 + q)^2 / den)
+# Log space: e^{−a} and 1/D′ meet in one exponent, so neither underflows or overflows alone.
+_endpoint_slope_log(a, den) = exp((log(oftype(a, 4)) - 2 * log1p(exp(-a))) - log(den) - a)
+
+# Largest a = 2|t| that takes the direct form. e^{−600} ≈ 2.6e-261 is a normal Float64 with
+# about 108 natural-log units of margin above the smallest normal number (e^{−708.4}), so the
+# direct form loses no digits to underflow; and since D′ ≤ 1 the slope, which is at least
+# e^{−a}, is normal too. The log form is used only above it, where e^{−a} approaches or falls
+# below the normal range. The value assumes Float64 or a wider type, which every caller in the
+# package passes (`Control` stores β and η as Float64).
+const _ENDPOINT_SLOPE_DIRECT_MAX = 600
+
+"""
+    ∂projection_∂pf_stable(x, β, η) -> Real
+
+The derivative of `tanh_projection(x, η, β)` with respect to `x`, the same quantity as
+`∂projection_∂pf(x, β, η)`, evaluated as sech²(t)/D′ with
+
+    t = β(x − η),   D′ = η·tanhc(βη) + (1 − η)·tanhc(β(1 − η)) = (tanh(βη) + tanh(β(1 − η)))/β,
+    tanhc(u) = tanh(u)/u,   sech²(t) = 4e^{−2|t|}/(1 + e^{−2|t|})².
+
+The form in `∂projection_∂pf`, β(1 − tanh²(β(x − η)))/(tanh(βη) + tanh(β(1 − η))), loses digits
+to cancellation as tanh approaches ±1 and all of them once it rounds to ±1 (|β(x − η)| above
+about 19 in Float64, where it returns 0 although the slope is still representable), and its
+denominator rounds to 0 when βη and β(1 − η) underflow at the smallest positive β.
+
+For a = 2|t| ≤ 600 the quotient is formed directly from e^{−a}, which is then a normal number.
+Its relative error in Float64 is a few eps plus the rounding of β(x − η) amplified about a times
+by the exponential (none when β(x − η) is exact, as for η = 0.5 and β a power of 2). Above that,
+where e^{−a} alone would lose digits or round to 0 while the slope may still be representable
+(subnormal, or normal when 1/D′ is large), it is evaluated in log space as
+exp(log 4 − a − 2·log1p(e^{−a}) − log D′). There the relative error is about (a + |log D′| + 4)·eps,
+because rounding occurs in forming the exponent before it is exponentiated; a subnormal result has
+the same relative error plus its final rounding. In units in the last place this can be hundreds
+for a subnormal result (51 was the largest subnormal miss for integer β from 700 to 760 at
+η = 0.5; other accepted inputs miss by hundreds). The result is 0 only where the slope is below
+about the smallest positive number. At β = ∞ it returns 0, as `∂projection_∂pf` does; as β → 0⁺
+it tends to 1. These accuracy statements are for Float64 or wider arguments (the switch at
+a = 600 assumes the Float64 range); it computes in the promoted floating type of its arguments.
+
+This is the unit slope. With Float64 operands, products with the rounded unit slope can underflow or lose accuracy when that slope falls below the normal range (near β = 716 for η = 0.5).
+"""
+function ∂projection_∂pf_stable(x::Real, β::Real, η::Real)
+    T = float(promote_type(typeof(x), typeof(β), typeof(η)))
+    isinf(β) && return zero(T)
+    xT, βT, ηT = T(x), T(β), T(η)
+    a = 2 * abs(βT * (xT - ηT))                                     # 2|t|
+    den = ηT * _tanhc(βT * ηT) + (1 - ηT) * _tanhc(βT * (1 - ηT))   # D′
+    return a <= _ENDPOINT_SLOPE_DIRECT_MAX ? _endpoint_slope_direct(a, den) :
+                                             _endpoint_slope_log(a, den)
+end
+
+"""
+    flat_ssp_slope(ρ̃, ∇ρ̃, β, η) -> Real
+
+Density slope of the SSP where the filtered field is flat (‖∇ρ̃‖ < 1e-8). There the forward
+model is the formula `tanh_projection(ρ̃, η, β)`; at ρ̃ = 0 with ∇ρ̃ = 0 exactly, `smooth_project`
+returns 0, which is that formula's value at 0 in exact arithmetic. That point, the feasible lower
+bound of an all-void region, gets the formula's analytic one-sided slope into ρ̃ > 0 from
+`∂projection_∂pf_stable`. The slope is positive at every finite β, and its Float64 value is 0
+only where the slope is below about the smallest positive Float64. Returning 0 there made an
+all-void design look stationary. At the smallest positive Float64 β with η = 0.5, a nearby flat Float64 density gives 0/0 in the forward formula. A higher-precision density can also expose rounding in the forward formula.
+Every other flat point keeps `∂projection_∂pf`, unchanged.
+"""
+flat_ssp_slope(ρ̃, ∇ρ̃, β, η) =
+    (ρ̃ == 0 && ∇ρ̃ == zero(∇ρ̃)) ? ∂projection_∂pf_stable(ρ̃, β, η) : ∂projection_∂pf(ρ̃, β, η)
+
 """
     DSP_dpf(p, ρ̃, ∇ρ̃; R, β, η) -> Real
 
 Derivative ∂pt/∂pf for SSP adjoint.
 """
 function DSP_dpf(p::Real, ρ̃::Real, ∇ρ̃; R::Float64, β::Float64, η::Float64)
-    if ρ̃ == 0.0 && ∇ρ̃ == zero(∇ρ̃)
-        return 0.0
-    end
-
+    # ρ̃ = 0 with ∇ρ̃ = 0 takes the flat-field branch: see `flat_ssp_slope`.
     norm∇ρ̃ = sqrt(∇ρ̃ ⋅ ∇ρ̃)
     if norm∇ρ̃ < 1e-8
         # Flat-field branch. The `* p` test-function factor is REQUIRED here, exactly
@@ -68,7 +136,7 @@ function DSP_dpf(p::Real, ρ̃::Real, ∇ρ̃; R::Float64, β::Float64, η::Floa
         # P1 nodal entry receives the full cell integral instead of its 1/4 share, so
         # the gradient is exactly 4x too large wherever the filtered field is flat --
         # i.e. everywhere at uniform-0.5 init, and dormant at developed designs.
-        return ∂projection_∂pf(ρ̃, β, η) * p
+        return flat_ssp_slope(ρ̃, ∇ρ̃, β, η) * p
     end
 
     d = ((η - ρ̃) / norm∇ρ̃) / R
@@ -367,12 +435,10 @@ lose most of the gradient, not a small correction.
 """
 function sidewall_partials(ρ̃::Real, ∇ρ̃, z::Real; R::Float64, β::Float64,
                            η::Float64, slope::Float64, z0::Float64)
-    if ρ̃ == 0.0 && ∇ρ̃ == zero(∇ρ̃)
-        return 0.0, 0.0
-    end
+    # ρ̃ = 0 with ∇ρ̃ = 0 takes the flat branch, as in `DSP_dpf`: see `flat_ssp_slope`.
     norm∇ρ̃ = sqrt(∇ρ̃ ⋅ ∇ρ̃)
     if norm∇ρ̃ < 1e-8
-        return ∂projection_∂pf(ρ̃, β, η), 0.0
+        return flat_ssp_slope(ρ̃, ∇ρ̃, β, η), 0.0
     end
 
     k  = sqrt(1 + slope^2)
@@ -414,9 +480,6 @@ function dpt_dpf_sidewall(p, ∇p, pf, ∇pf, z; control)
 
     slope == 0.0 && return dpt_dpf(p, ∇p, pf, ∇pf; control)   # see smooth_project_sidewall
 
-    if pf == 0.0 && ∇pf == zero(∇pf)
-        return 0.0
-    end
     norm∇pf = sqrt(∇pf ⋅ ∇pf)
     a, c = sidewall_partials(pf, ∇pf, z; R, β, η, slope, z0)
     norm∇pf < 1e-8 && return a * p
