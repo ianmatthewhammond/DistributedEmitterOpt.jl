@@ -23,6 +23,10 @@ sumabs(a::CellField) = Operation(sumabs)(a)
 """
     spectral_sweep(prob, p_opt; center_λ, range_λ, points, root)
 
+The sweep evaluates `p_opt` at each wavelength on `prob`. On return, normal or by an error, `prob.g` and
+`prob.∇g` hold the values they had before the call.
+At zero points, only single-pool sweeps previously returned empty results.
+
 Sweep wavelength around a center value, re-evaluating the objective.
 Does not perform optimization, only analysis.
 
@@ -36,6 +40,26 @@ function spectral_sweep(prob::OptimizationProblem, p_opt::Vector{Float64};
     points::Int=40,
     root::String=prob.root,
     save_plot::Bool=true
+)
+    # Each evaluation of the sweep overwrites the caller's score and gradient: save them and restore them on
+    # return, normal or by an error.
+    original_g = prob.g
+    original_∇g = copy(prob.∇g)
+    try
+        return _spectral_sweep_evaluations(prob, p_opt; center_λ, range_λ, points, root, save_plot)
+    finally
+        prob.g = original_g
+        prob.∇g .= original_∇g
+    end
+end
+
+# The body of `spectral_sweep`, which saves and restores `prob.g` and `prob.∇g` around it.
+function _spectral_sweep_evaluations(prob::OptimizationProblem, p_opt::Vector{Float64};
+    center_λ::Float64,
+    range_λ::Float64,
+    points::Int,
+    root::String,
+    save_plot::Bool
 )
     # Generate wavelength list (log-spaced away from center to capture resonance)
     # Similar to Setup.jl logic

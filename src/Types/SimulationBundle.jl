@@ -190,3 +190,17 @@ function clear_maxwell_factors!(bundle::SolverPoolBundle)
         clear_maxwell_factors!(pool)
     end
 end
+
+"""
+    empty!(bundle::SolverPoolBundle)
+
+Empty every pool of the bundle as `empty!(::SolverCachePool)` does; the pools themselves are kept. The default pool
+is emptied once, including when it appears in `by_pol`.
+"""
+function Base.empty!(bundle::SolverPoolBundle)
+    empty!(bundle.default)
+    for pool in values(bundle.by_pol)
+        pool === bundle.default || empty!(pool)
+    end
+    return bundle
+end
