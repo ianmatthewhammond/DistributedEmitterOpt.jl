@@ -46,7 +46,7 @@ function build_multi_output_problem(; foundry_mode::Bool)
     end
 
     meshfile = tempname() * ".msh"
-    genmesh(geo, meshfile; per_x=false, per_y=false)
+    genmesh(geo, meshfile; per_x=false, per_y=false, mirror_curves=true)
 
     env = Environment(mat_design="Ag", mat_substrate="Ag", mat_fluid=1.33)
     inputs = [FieldConfig(532.0; θ=0.0, pol=:y)]

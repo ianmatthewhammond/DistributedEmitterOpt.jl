@@ -62,8 +62,9 @@ intervals. `structured=false` keeps independent unstructured meshing; its
 finite-mesh symmetry error must then be checked by refinement. The builder
 always tags the CAD curves and points on the mirror walls (`genmesh(...;
 mirror_curves=true)`), so a PEC wall constrains every tangential degree of
-freedom on it for either kind of mesh. Existing `genmesh` calls retain their
-original tetrahedral behavior. Each generated mesh gets a recipe file
+freedom on it for either kind of mesh. Plain `genmesh` calls retain their
+original tetrahedral meshes and surface-only wall tags.
+This leaves some tangential degrees of freedom on the PEC wall curves free (see [mirror wall tags](mirror_walls.md)). Each generated mesh gets a recipe file
 (`meshfile * ".recipe"`) with its genmesh inputs and the SHA-256 of the mesh file;
 `reuse_mesh=true` refuses a mesh whose recipe differs from the one this call would
 write or whose file no longer has the recorded digest, and checks the extents,

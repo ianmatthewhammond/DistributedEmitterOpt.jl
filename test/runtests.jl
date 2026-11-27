@@ -42,6 +42,10 @@ using Test
         include("material_tables_tests.jl")
     end
 
+    @testset "Mirror Wall Tag Tests" begin
+        include("mirror_tags_tests.jl")
+    end
+
     @testset "Logger Tests" begin
         include("logger_tests.jl")
     end

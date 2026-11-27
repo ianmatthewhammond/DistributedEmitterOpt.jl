@@ -23,6 +23,7 @@ OptimizationProblem
 ```julia
 using DistributedEmitterOpt
 
+# mesh.msh from genmesh(geo, "mesh.msh"; mirror_curves=true): the y walls are PEC here
 sim = build_simulation("mesh.msh")
 
 prob = OptimizationProblem(sim, UmfpackSolver();
