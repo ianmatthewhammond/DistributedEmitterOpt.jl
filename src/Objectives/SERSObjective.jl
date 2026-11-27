@@ -11,6 +11,8 @@ over molecular region using SO(3)-averaged trace formulation.
 - `E_threshold` — Damage threshold field magnitude; ≥ 0 when `use_damage_model=true` (0 centres the attenuation at zero intensity), `Inf` means no damage
 - `volume` — Integrate over fluid volume
 - `surface` — Integrate over metal-fluid interface
+- `t_shell` — Shell thickness of the `:tv_void` measure; finite and > 0, with `t_shell^2` finite and > 0
+- `ε_grad` — Gradient-norm regularisation; finite and ≥ 0, and with `surface_mode=:tv_void` > 0 with `ε_grad^2` finite and > 0
 """
 Base.@kwdef struct SERSObjective <: ObjectiveFunction
     # Raman tensor (3×3 complex)
@@ -40,14 +42,26 @@ Base.@kwdef struct SERSObjective <: ObjectiveFunction
                            surface_mode, t_shell, ε_grad, require_substrate, shell_cache)
         surface_mode in (:band, :tv_void) ||
             throw(ArgumentError("SERSObjective: surface_mode must be :band or :tv_void, got $(repr(surface_mode))"))
+        # Convert first (the conversions `new` applies), so the checks see the stored Float64 values:
+        # a wider-typed value beyond the Float64 range converts to Inf, one below it to 0.0.
+        t_shell = convert(Float64, t_shell)
+        ε_grad = convert(Float64, ε_grad)
         (isfinite(t_shell) && t_shell > 0) ||
             throw(ArgumentError("SERSObjective: t_shell must be finite and > 0, got $t_shell"))
-        # :tv_void divides by |∇χ_s|_ε to form û; ε_grad = 0 gives 0/0 wherever χ_s is flat (bulk
-        # void, bulk metal), so the regularisation is mandatory there. :band never uses it.
+        # The shell filter assembles t_shell^2 (shell_factor!), so that square must also be finite and > 0.
+        (isfinite(t_shell^2) && t_shell^2 > 0) ||
+            throw(ArgumentError("SERSObjective: t_shell^2 must be finite and > 0, got t_shell = $t_shell " *
+                                "(t_shell^2 = $(t_shell^2))"))
+        # :tv_void divides by |∇χ_s|_ε = sqrt(|∇χ_s|^2 + ε_grad^2) to form û; ε_grad^2 = 0 gives 0/0
+        # wherever χ_s is flat (bulk void, bulk metal), so the regularisation is mandatory there, and
+        # ε_grad^2 = Inf makes the measure infinite. :band never uses it.
         if surface_mode == :tv_void
             (isfinite(ε_grad) && ε_grad > 0) ||
                 throw(ArgumentError("SERSObjective: surface_mode=:tv_void needs ε_grad finite and > 0 " *
                                     "(û = ∇χ_s/|∇χ_s|_ε is 0/0 in flat regions otherwise), got $ε_grad"))
+            (isfinite(ε_grad^2) && ε_grad^2 > 0) ||
+                throw(ArgumentError("SERSObjective: surface_mode=:tv_void needs ε_grad^2 finite and > 0, " *
+                                    "got ε_grad = $ε_grad (ε_grad^2 = $(ε_grad^2))"))
         else
             (isfinite(ε_grad) && ε_grad >= 0) ||
                 throw(ArgumentError("SERSObjective: ε_grad must be finite and >= 0, got $ε_grad"))
