@@ -30,6 +30,10 @@ using Test
         include("damage_settings_tests.jl")
     end
 
+    @testset "Shell Settings Tests" begin
+        include("shell_settings_tests.jl")
+    end
+
     @testset "Mesh Repair Tests" begin
         include("mesh_repair_tests.jl")
     end
